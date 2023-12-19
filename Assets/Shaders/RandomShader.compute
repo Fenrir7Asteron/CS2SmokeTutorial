@@ -1,0 +1,156 @@
+// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel ComputeSmokeVoxelPositions
+#pragma kernel ComputeSmokeVoxelColors
+#pragma kernel ComputeFloodFill
+#pragma enable_d3d11_debug_symbols
+#include <HLSLSupport.cginc>
+#include <UnityShaderVariables.cginc>
+
+struct Cube
+{
+    float4 position;
+    float4 color;
+    int3 flags; // x - isVisible, y - is occupied by static mesh, z - flood fill remaining power
+};
+
+struct SmokeParameters
+{
+    float4 spawnPosition; // xyz is spawn position
+    float4 radius; // xyz are ellipsoid radii
+    float2 spawnTime; // x - spawn duration, y - spawn start timestamp 
+};
+
+CBUFFER_START(_voxelGridParameters)
+    float4 _voxelSize;
+    int4 _voxelCounts; // x stores total voxelCount, yzw store voxel counts for each xyz axis 
+    float4 _voxelZoneExtents; // xyz store zone extents
+    float4 _voxelZoneCenter; // xyz store zone center
+CBUFFER_END
+
+RWStructuredBuffer<Cube> _voxels;
+StructuredBuffer<SmokeParameters> _smokeParameters;
+
+float rand(float2 co)
+{
+    return frac(sin(dot(co.xy, float2(12.9898, 78.233))) * 43758.5453) * 1;
+}
+
+float ease_smoke_progress(float x) {
+    if (x < 0.5)
+    {
+        return 2.0 * pow(x, 2);   
+    }
+    else
+    {
+        return 1.0 - (0.025 / (0.2 * pow(x, 2)));
+    }
+}
+
+float3 VoxelIdxToVoxelPosition(const uint voxelIdx)
+{
+    const float xPos = voxelIdx % _voxelCounts.y;
+    const float yPos = (voxelIdx / _voxelCounts.y) % _voxelCounts.z;
+    const float zPos = voxelIdx / (_voxelCounts.y * _voxelCounts.z);
+    const float3 voxelSizeVector = _voxelSize.xxx;
+    return float3(xPos, yPos, zPos) * voxelSizeVector + voxelSizeVector * 0.5
+        + _voxelZoneCenter.xyz - _voxelZoneExtents.xyz;
+}
+
+uint VoxelIdx3DToVoxelIdx(const int3 voxelIndices)
+{
+    return voxelIndices.x + voxelIndices.y * _voxelCounts.y + voxelIndices.z * _voxelCounts.y * _voxelCounts.z;
+}
+
+uint GetVoxelIdx(uint x, uint y)
+{
+    return (int) x * 8 + (int) y;
+}
+
+int CalculateSmokeVisibility(const float3 pos)
+{
+    SmokeParameters smokeParameters = _smokeParameters[0];
+
+    float smokeProgress = (_Time.y - smokeParameters.spawnTime.y) / smokeParameters.spawnTime.x;
+    smokeProgress = ease_smoke_progress(smokeProgress);
+
+    return  length((pos - smokeParameters.spawnPosition.xyz) / smokeParameters.radius.xyz) < smokeProgress;
+}
+
+bool IsInsideVoxelGrid(const int3 voxelIndices)
+{
+    return voxelIndices.x >= 0 && voxelIndices.x < _voxelCounts.y
+        && voxelIndices.y >= 0 && voxelIndices.y < _voxelCounts.z
+        && voxelIndices.z >= 0 && voxelIndices.z < _voxelCounts.w;
+}
+
+static int3 offsets[6] = {
+    int3(-1, 0, 0),
+    int3(1, 0, 0),
+    int3(0, -1, 0),
+    int3(0, 1, 0),
+    int3(0, 0, -1),
+    int3(0, 0, 1),
+};
+
+int CalculateFloodFill(const int3 voxelIdx3D, int currentValue)
+{
+    int newValue = currentValue;
+
+    for (int i = 0; i < 6; ++i)
+    {
+        const int3 neighbourIdx3D = voxelIdx3D + offsets[i];
+
+        if (IsInsideVoxelGrid(neighbourIdx3D))
+        {
+            const uint neighbourVoxelIdx = VoxelIdx3DToVoxelIdx(neighbourIdx3D);
+            newValue = max(newValue, _voxels[neighbourVoxelIdx].flags.z - 1);       
+        }
+    }
+    
+    newValue = max(newValue, 0);
+
+    return newValue;
+}
+
+[numthreads(8,8,1)]
+void ComputeSmokeVoxelPositions (uint3 id : SV_DispatchThreadID)
+{
+    const uint voxelIdx = GetVoxelIdx(id.x, id.y);
+    Cube cube = _voxels[voxelIdx];
+
+    const float3 pos = VoxelIdxToVoxelPosition(voxelIdx);
+    cube.position.xyz = pos;
+    
+    cube.flags.x = CalculateSmokeVisibility(pos);
+
+    _voxels[voxelIdx] = cube;
+}
+
+[numthreads(8,8,1)]
+void ComputeSmokeVoxelColors (uint3 id : SV_DispatchThreadID)
+{
+    const uint voxelIdx = GetVoxelIdx(id.x, id.y);
+    Cube cube = _voxels[voxelIdx];
+
+    const float3 pos = VoxelIdxToVoxelPosition(voxelIdx);
+    
+    float r = rand(float2(pos.x, pos.y));
+    float g = rand(float2(pos.x, pos.z));
+    float b = rand(float2(pos.y, pos.z));
+    cube.color = float4(r, g, b, 1.0);
+
+    _voxels[voxelIdx] = cube;
+}
+
+[numthreads(8,8,1)]
+void ComputeFloodFill (uint3 id : SV_DispatchThreadID)
+{
+    const uint voxelIdx = GetVoxelIdx(id.x, id.y);
+    Cube cube = _voxels[voxelIdx];
+    const int x = voxelIdx % _voxelCounts.y;
+    const int y = (voxelIdx / _voxelCounts.y) % _voxelCounts.z;
+    const int z = voxelIdx / (_voxelCounts.y * _voxelCounts.z);
+    const int3 voxelIdx3D = int3(x, y, z);
+    cube.flags.z = CalculateFloodFill(voxelIdx3D, cube.flags.z) * (1 - cube.flags.y);
+    _voxels[voxelIdx] = cube;
+}
