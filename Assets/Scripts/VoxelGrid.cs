@@ -293,7 +293,7 @@ public class VoxelGrid : MonoBehaviour
             //bool isEnabled = voxelDataData.flags is {x: 1, z: > 0};
 
             _objects[i].transform.position = new Vector3(voxelDataData.position.x, voxelDataData.position.y, voxelDataData.position.z);
-            _meshRenderers[i].enabled = isEnabled;
+            //_meshRenderers[i].enabled = isEnabled;
         }
     }
     
@@ -556,6 +556,16 @@ public class VoxelGrid : MonoBehaviour
     public VoxelGridParameters GetGridParameters()
     {
         return _voxelGridParameters;
+    }
+
+    public SmokeParameters GetSmokeParameters()
+    {
+        return _smokeParameters;
+    }
+
+    public int GetMaxFloodValue()
+    {
+        return floodDistance;
     }
 }
 

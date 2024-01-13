@@ -1,46 +1,81 @@
 ﻿using UnityEngine;
 
+[ImageEffectAllowedInSceneView]
 public class Raymarching : MonoBehaviour 
 {
     [SerializeField] private Material raymarchingMaterial;
-    [SerializeField] private Transform sunLight;
+    [SerializeField] private Light sunLight;
     [SerializeField] private VoxelGrid voxelGrid;
     
     private Camera _currentCamera;
     
     private static readonly int VoxelDataPropertyID = Shader.PropertyToID("_smokeVoxels");
+    private static readonly int SmokeParametersPropertyID = Shader.PropertyToID("_smokeParameters");
     private static readonly int VoxelGridParametersPropertyID = Shader.PropertyToID("_voxelGridParameters");
     private static readonly int FrustumCornersESPropertyID = Shader.PropertyToID("_FrustumCornersES");
     private static readonly int CameraInvViewMatrixPropertyID = Shader.PropertyToID("_CameraInvViewMatrix");
     private static readonly int CameraWsPropertyID = Shader.PropertyToID("_CameraWS");
     private static readonly int LightDirPropertyID = Shader.PropertyToID("_LightDir");
+    private static readonly int LightColorPropertyID = Shader.PropertyToID("_LightColor");
+    private static readonly int MouseYPositionPropertyID = Shader.PropertyToID("_MouseYPosition");
+    private static readonly int MaxFloodValuePropertyID = Shader.PropertyToID("_MaxFloodValue");
 
-    private void Awake()
-    {
-        _currentCamera = Camera.main;
+    public Camera CurrentCamera 
+    { 
+        get 
+        {
+            if (_currentCamera != null)
+            {
+                return _currentCamera; 
+            }
+
+#if UNITY_EDITOR
+            _currentCamera = GetSceneEditorCamera();
+#else
+            _currentCamera = Camera.main;
+#endif
+
+            return _currentCamera;
+        }
+        set => _currentCamera = value; 
     }
 
     [ImageEffectOpaque]
     void OnRenderImage(RenderTexture source, RenderTexture destination)
     {
-        if (!raymarchingMaterial || !_currentCamera)
+        if (!raymarchingMaterial || !CurrentCamera)
         {
             Graphics.Blit(source, destination); // do nothing
             return;
         }
 
-        // pass frustum rays to shader
-        raymarchingMaterial.SetMatrix(FrustumCornersESPropertyID, GetFrustumCorners(_currentCamera));
-        raymarchingMaterial.SetMatrix(CameraInvViewMatrixPropertyID, _currentCamera.cameraToWorldMatrix);
-        raymarchingMaterial.SetVector(CameraWsPropertyID, _currentCamera.transform.position);
-        raymarchingMaterial.SetVector(LightDirPropertyID, sunLight ? sunLight.forward : Vector3.down);
-
         VoxelData[] voxelData = voxelGrid.GetVoxelData();
+
+        if (voxelData == null)
+        {
+            Graphics.Blit(source, destination); // do nothing
+            return;
+        }
+            
+
+        // pass frustum rays to shader
+        raymarchingMaterial.SetMatrix(FrustumCornersESPropertyID, GetFrustumCorners(CurrentCamera));
+        raymarchingMaterial.SetMatrix(CameraInvViewMatrixPropertyID, CurrentCamera.cameraToWorldMatrix);
+        raymarchingMaterial.SetVector(CameraWsPropertyID, CurrentCamera.transform.position);
+        raymarchingMaterial.SetVector(LightDirPropertyID, sunLight ? sunLight.transform.forward : Vector3.down);
+        raymarchingMaterial.SetVector(LightColorPropertyID, sunLight ? sunLight.color : Vector3.one);
+        raymarchingMaterial.SetFloat(MouseYPositionPropertyID, Mathf.Clamp01(Input.mousePosition.y / Screen.height));
+        raymarchingMaterial.SetInt(MaxFloodValuePropertyID, voxelGrid.GetMaxFloodValue());
+
         GraphicsBuffer voxelDataBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, voxelData.Length,
             System.Runtime.InteropServices.Marshal.SizeOf(typeof(VoxelData)));
         voxelDataBuffer.SetData(voxelData);
-        
         raymarchingMaterial.SetBuffer(VoxelDataPropertyID, voxelDataBuffer);
+
+        GraphicsBuffer smokeParametersBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, 1,
+            System.Runtime.InteropServices.Marshal.SizeOf(typeof(SmokeParameters)));
+        smokeParametersBuffer.SetData(new []{voxelGrid.GetSmokeParameters()});
+        raymarchingMaterial.SetBuffer(SmokeParametersPropertyID, smokeParametersBuffer);
 
         VoxelGridParameters voxelGridParameters = voxelGrid.GetGridParameters();
         GraphicsBuffer voxelGridConstantBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Constant, 1,
@@ -53,6 +88,7 @@ public class Raymarching : MonoBehaviour
         CustomGraphicsBlit(source, destination, raymarchingMaterial, 0); // use given effect shader as image effect
         
         voxelDataBuffer.Dispose();
+        smokeParametersBuffer.Dispose();
         voxelGridConstantBuffer.Dispose();
     }
 
@@ -131,4 +167,11 @@ public class Raymarching : MonoBehaviour
         GL.End();
         GL.PopMatrix();
     }
+
+#if UNITY_EDITOR
+    private Camera GetSceneEditorCamera()
+    {
+        return UnityEditor.EditorWindow.GetWindow<UnityEditor.SceneView>().camera;
+    }
+#endif
 }

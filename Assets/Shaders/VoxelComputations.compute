@@ -5,6 +5,7 @@
 #pragma enable_d3d11_debug_symbols
 #include <HLSLSupport.cginc>
 #include <UnityShaderVariables.cginc>
+#include <VoxelUtils.cginc>
 
 struct Cube
 {
@@ -46,21 +47,6 @@ float ease_smoke_progress(float x) {
     }
 }
 
-float3 VoxelIdxToVoxelPosition(const uint voxelIdx)
-{
-    const float xPos = voxelIdx % _voxelCounts.y;
-    const float yPos = (voxelIdx / _voxelCounts.y) % _voxelCounts.z;
-    const float zPos = voxelIdx / (_voxelCounts.y * _voxelCounts.z);
-    const float3 voxelSizeVector = _voxelSize.xxx;
-    return float3(xPos, yPos, zPos) * voxelSizeVector + voxelSizeVector * 0.5
-        + _voxelZoneCenter.xyz - _voxelZoneExtents.xyz;
-}
-
-uint VoxelIdx3DToVoxelIdx(const int3 voxelIndices)
-{
-    return voxelIndices.x + voxelIndices.y * _voxelCounts.y + voxelIndices.z * _voxelCounts.y * _voxelCounts.z;
-}
-
 uint GetVoxelIdx(uint x, uint y)
 {
     return (int) x * 8 + (int) y;
@@ -75,13 +61,6 @@ int CalculateSmokeVisibility(const float3 pos, const float floodValue)
 
     const float distanceToSmokeOrigin = length((pos - smokeParameters.spawnPosition.xyz) / smokeParameters.radius.xyz);
     return step(distanceToSmokeOrigin, smokeProgress) * step(0.001, floodValue);
-}
-
-bool IsInsideVoxelGrid(const int3 voxelIndices)
-{
-    return voxelIndices.x >= 0 && voxelIndices.x < _voxelCounts.y
-        && voxelIndices.y >= 0 && voxelIndices.y < _voxelCounts.z
-        && voxelIndices.z >= 0 && voxelIndices.z < _voxelCounts.w;
 }
 
 static int3 offsets[6] = {
@@ -101,11 +80,9 @@ int CalculateFloodFill(const int3 voxelIdx3D, int currentValue)
     {
         const int3 neighbourIdx3D = voxelIdx3D + offsets[i];
 
-        if (IsInsideVoxelGrid(neighbourIdx3D))
-        {
-            const uint neighbourVoxelIdx = VoxelIdx3DToVoxelIdx(neighbourIdx3D);
-            newValue = max(newValue, _voxels[neighbourVoxelIdx].flags.z - 1);       
-        }
+        const float isInsideVoxelGrid = insideBox3D(neighbourIdx3D, float3(0.0, 0.0, 0.0), _voxelCounts.yzw);
+        const uint neighbourVoxelIdx = VoxelIdx3DToVoxelIdx(neighbourIdx3D, _voxelCounts.yz);
+        newValue = max(newValue, (_voxels[neighbourVoxelIdx].flags.z - 1) * isInsideVoxelGrid);       
     }
     
     newValue = max(newValue, 0);
@@ -119,7 +96,7 @@ void ComputeSmokeVoxelPositions (uint3 id : SV_DispatchThreadID)
     const uint voxelIdx = GetVoxelIdx(id.x, id.y);
     Cube cube = _voxels[voxelIdx];
 
-    const float3 pos = VoxelIdxToVoxelPosition(voxelIdx);
+    const float3 pos = VoxelIdxToVoxelPosition(voxelIdx, _voxelCounts.yz, _voxelZoneCenter.xyz, _voxelZoneExtents.xyz, _voxelSize.xxx);
     cube.position.xyz = pos;
     
     cube.flags.x = CalculateSmokeVisibility(pos, cube.flags.z);
@@ -133,7 +110,7 @@ void ComputeSmokeVoxelColors (uint3 id : SV_DispatchThreadID)
     const uint voxelIdx = GetVoxelIdx(id.x, id.y);
     Cube cube = _voxels[voxelIdx];
 
-    const float3 pos = VoxelIdxToVoxelPosition(voxelIdx);
+    const float3 pos = VoxelIdxToVoxelPosition(voxelIdx, _voxelCounts.yz, _voxelZoneCenter.xyz, _voxelZoneExtents.xyz, _voxelSize.xxx);
     
     float r = rand(float2(pos.x, pos.y));
     float g = rand(float2(pos.x, pos.z));
@@ -148,10 +125,7 @@ void ComputeFloodFill (uint3 id : SV_DispatchThreadID)
 {
     const uint voxelIdx = GetVoxelIdx(id.x, id.y);
     Cube cube = _voxels[voxelIdx];
-    const int x = voxelIdx % _voxelCounts.y;
-    const int y = (voxelIdx / _voxelCounts.y) % _voxelCounts.z;
-    const int z = voxelIdx / (_voxelCounts.y * _voxelCounts.z);
-    const int3 voxelIdx3D = int3(x, y, z);
+    const int3 voxelIdx3D = VoxelIdxToInt3(voxelIdx, _voxelCounts.yz);
     cube.flags.z = CalculateFloodFill(voxelIdx3D, cube.flags.z) * (1 - cube.flags.y);
     _voxels[voxelIdx] = cube;
 }
