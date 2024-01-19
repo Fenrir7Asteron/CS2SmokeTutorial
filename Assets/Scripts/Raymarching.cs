@@ -1,4 +1,5 @@
 ﻿using UnityEngine;
+using UnityEngine.Experimental.Rendering;
 
 [ImageEffectAllowedInSceneView]
 public class Raymarching : MonoBehaviour 

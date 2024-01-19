@@ -21,14 +21,17 @@ Shader "Hidden/RaymarchingSmoke"
             #include "WorleyNoise.cginc"
             #include "Interpolation.cginc"
             #include "VoxelUtils.cginc"
+            #include "AutoLight.cginc"
 
             // Raymarching constants
-            #define MAX_STEP_COUNT 256
+            #define MAX_STEP_COUNT 128
+            #define MAX_SHADOW_STEP_COUNT 32
             #define STEP_SIZE 0.05
 
             // Noise constants
-            #define WORLEY_NOISE_SLICES_COUNT 128
-            #define WORLEY_NOISE_FREQUENCY 4.0
+            #define WORLEY_NOISE_SLICES_COUNT 512
+            #define WORLEY_NOISE_FREQUENCY 16.0
+            #define NOISE_MULTIPLIER 0.2
 
             #define PI 3.141592
 
@@ -56,7 +59,8 @@ Shader "Hidden/RaymarchingSmoke"
             {
                 float4 spawnPosition; // xyz is spawn position
                 float4 radius; // xyz are ellipsoid radii
-                float2 spawnTime; // x - spawn duration, y - spawn start timestamp 
+                float2 spawnTime; // x - spawn duration, y - spawn start timestamp
+                float2 density; // x - smoke density, y - shadow density
             };
 
             CBUFFER_START(_voxelGridParameters)
@@ -70,6 +74,7 @@ Shader "Hidden/RaymarchingSmoke"
             StructuredBuffer<SmokeParameters> _smokeParameters;
 
             // Input to vertex shader
+
             struct appdata
             {
                 // Remember, the z value here contains the index of _FrustumCornersES to use
@@ -78,15 +83,16 @@ Shader "Hidden/RaymarchingSmoke"
             };
 
             // Output of vertex shader / input to fragment shader
+
             struct v2f
             {
                 float4 pos : SV_POSITION;
                 float2 uv : TEXCOORD0;
                 float3 ray : TEXCOORD1;
             };
-            
+
             int CalculateVoxelIdxByWorldPosition(float3 worldPosition, float3 voxelGridCenter, float3 extents,
-                const int3 voxelCounts)
+                                                 const int3 voxelCounts)
             {
                 const float3 zoneSize = extents * 2;
                 float3 voxelPosition = worldPosition - voxelGridCenter + extents;
@@ -116,10 +122,33 @@ Shader "Hidden/RaymarchingSmoke"
                 int3(1, 1, 1),
             };
 
+            float CalculateWorleyNoise(const float3 samplePosition, const float3 spawnPosition, const float distanceFromSmokeOrigin)
+            {
+                float3 n = normalize(samplePosition - spawnPosition);
+                float u = atan2(n.x, n.z) / (2*PI) + 0.5;
+                float v = n.y * 0.5 + 0.5;
+                const float timeOffset = frac(_Time.x);
+                float2 uv = float2(u, v + timeOffset);
+                
+                const float slices = WORLEY_NOISE_SLICES_COUNT; // number of layers of the 3d texture
+                const float freq = WORLEY_NOISE_FREQUENCY;
+                
+                const float3 noiseUVW = float3(uv, floor((distanceFromSmokeOrigin) * slices) / slices);
+                float pfbm= lerp(1.0, perlinfbm(noiseUVW, 4.0, 7), 0.5);
+                pfbm = abs(pfbm * 2.0 - 1.0); // billowy perlin noise
+                //return pfbm;
+                
+                float worleyNoise = worleyFbm(noiseUVW, freq);
+                worleyNoise = remap(pfbm, 0.0, 1.0, worleyNoise, 1.0); // perlin-worley
+                worleyNoise *= NOISE_MULTIPLIER;
+
+                return worleyNoise;
+            }
+
             // This is the distance field function.  The distance field represents the closest distance to the surface
             // of any object we put in the scene.  If the given point (point p) is inside of an object, we return a
             // negative answer.
-            float SampleSmokeDensity(float3 worldPosition)
+            float SampleSmokeDensity(const float3 worldPosition, const float3 spawnPosition, float distanceFromSmokeOrigin)
             {
                 const int voxelIdx =
                     CalculateVoxelIdxByWorldPosition(worldPosition,
@@ -129,11 +158,13 @@ Shader "Hidden/RaymarchingSmoke"
                 
                 const Cube v0 = _smokeVoxels[voxelIdx];
 
-                const SmokeParameters smokeParameters = _smokeParameters[0];
-                const float distanceEuclidian = length((worldPosition - smokeParameters.spawnPosition.xyz) / smokeParameters.radius.xyz);
+                const float noise = CalculateWorleyNoise(worldPosition,
+                                                         spawnPosition,
+                                                         distanceFromSmokeOrigin);
+
                 const float distanceFlood = 1.0 - v0.flags.z / (float) _MaxFloodValue;
-                const float distance = max(distanceEuclidian, distanceFlood);
-                const float falloff = smoothstep(0.05, 1.0, distance);
+                const float distance = max(distanceFromSmokeOrigin, distanceFlood);
+                const float falloff = smoothstep(0.05, 1.0, distance + noise);
 
                 // const int3 voxelIdx3D = VoxelIdxToInt3(voxelIdx, _voxelCounts.yz);
                 // int densities[8];
@@ -167,39 +198,21 @@ Shader "Hidden/RaymarchingSmoke"
                 return exp(-density);
             }
 
-            // Raymarch along given ray and return transmittance
-            float RaymarchCalculateTransmittance(float3 rayOrigin, float3 rayDirection) {
-                const int maxStepCount = 32;
-                const float stepSize = STEP_SIZE;
-                float totalDensity = 0.0f;
-                
-                for (int i = 0; i < maxStepCount; ++i) {
-                    const float3 samplePosition = rayOrigin + rayDirection * stepSize * i;
-
-                    const float density = SampleSmokeDensity(samplePosition);   
-                    totalDensity += density;
-                }
-
-                totalDensity *= stepSize;
-                return CalculateTransmittance(totalDensity);
+            float RayleighScattering(float cosThetaSquared)
+            {
+                return (3.0 * PI / 16.0) * (1 + cosThetaSquared);
             }
 
             // Raymarch along given ray and return smoke color
-            float3 RaymarchCalculatePixelColor(const float3 rayOrigin, const float3 rayDirection, const float sceneDepth, const float3 originalColor) {
-                const int maxStepCount = MAX_STEP_COUNT;
-                const float stepSize = STEP_SIZE;
-                float totalDensity = 0.0f;
+            float4 RaymarchCalculatePixelColor(const float3 rayOrigin, const float3 rayDirection,
+                    const float sceneDepth, const float3 originalColor) {
                 float3 color3 = originalColor;
                 const float3 volumeAlbedo = _SmokeAlbedo.xyz;
                 float baseTransmittance = 1.0;
-                float previousBaseTransmittance = 1.0;
-                const float3 ambientColor = unity_AmbientGround;
                 
-                int sampleIdx = 0;
-
                 const SmokeParameters smokeParameters = _smokeParameters[0];
-                float3 minAABB = max(smokeParameters.spawnPosition.xyz - smokeParameters.radius.xyz, _voxelZoneCenter.xyz - _voxelZoneExtents.xyz);
-                float3 maxAABB = min(smokeParameters.spawnPosition.xyz + smokeParameters.radius.xyz, _voxelZoneCenter.xyz + _voxelZoneExtents.xyz);
+                const float3 minAABB = max(smokeParameters.spawnPosition.xyz - smokeParameters.radius.xyz, _voxelZoneCenter.xyz - _voxelZoneExtents.xyz);
+                const float3 maxAABB = min(smokeParameters.spawnPosition.xyz + smokeParameters.radius.xyz, _voxelZoneCenter.xyz + _voxelZoneExtents.xyz);
 
                 const float3 boxIntersection = RayToBoxIntersection(rayOrigin, rayDirection, minAABB, maxAABB);
 
@@ -209,56 +222,70 @@ Shader "Hidden/RaymarchingSmoke"
 
                 const float3 rayOriginInsideGrid = rayOrigin + rayDirection * minDistance * step(0.0, minDistance);
 
-                if (boxIntersection.x < 1.0)
+                if (isIntersectingVoxelGrid < 1.0)
                 {
-                    return originalColor;
+                    return float4(originalColor, baseTransmittance);
                 }
 
-                for (int sampleIdx = 0; sampleIdx < maxStepCount; ++sampleIdx) {
-                    const float3 samplePosition = rayOriginInsideGrid + rayDirection * stepSize * sampleIdx;
-                    float distance = length(samplePosition - rayOrigin);
+                float3 samplePosition = rayOriginInsideGrid;
+                const float3 sampleOffset = rayDirection * STEP_SIZE;
+                const float3 shadowSampleOffset = -_LightDir * STEP_SIZE;
+                const float densityMultiplier = smokeParameters.density.x * STEP_SIZE;
+                const float shadowDensityMultiplier = smokeParameters.density.y * STEP_SIZE;
 
-                    float4 worley = float4(0.0, 0.0, 0.0, 0.0);
+                const float3 smokeSpawnPosition = smokeParameters.spawnPosition.xyz;
 
-                    const float slices = WORLEY_NOISE_SLICES_COUNT; // number of layers of the 3d texture
-                    const float freq = WORLEY_NOISE_FREQUENCY;
+                const float rayToSunAngle = dot(rayDirection, _LightDir);
+                const float rayToSunAngleSquared = rayToSunAngle * rayToSunAngle;
+                const float3 baseColor = _LightColor * volumeAlbedo;
+
+                for (int sampleIdx = 0; sampleIdx < MAX_STEP_COUNT; ++sampleIdx) {
+                    const float distance = length(samplePosition - rayOrigin);
+                    const float distanceFromSmokeOrigin =
+                        length((samplePosition - smokeSpawnPosition) / smokeParameters.radius.xyz);
                     
-                    float3 n = normalize(samplePosition - smokeParameters.spawnPosition);
-                    float u = atan2(n.x, n.z) / (2*PI) + 0.5;
-                    float v = n.y * 0.5 + 0.5;
-                    float2 uv = float2(u, v);
-
-                    float pfbm= lerp(1.0, perlinfbm(float3(uv, floor(_MouseYPosition*slices)/slices), 4.0, 7), 0.5);
-                    pfbm = abs(pfbm * 2.0 - 1.0); // billowy perlin noise
-                    
-                    worley.g += worleyFbm(float3(uv, floor(_MouseYPosition*slices)/slices), freq);
-                    worley.b += worleyFbm(float3(uv, floor(_MouseYPosition*slices)/slices), freq*2.0);
-                    worley.a += worleyFbm(float3(uv, floor(_MouseYPosition*slices)/slices), freq*4.0);
-                    worley.r += remap(pfbm, 0.0, 1.0, worley.g, 1.0); // perlin-worley
-
-                    distance += worley.r * 2.5;
-
                     const float depthTest = step(distance, sceneDepth);
 
                     if (distance > maxDistance || depthTest < 1.0)
                     {
                         break;
                     }
+                    
+                    float sampleDensity = SampleSmokeDensity(samplePosition, smokeSpawnPosition, distanceFromSmokeOrigin)
+                        * depthTest
+                    ;
 
-                    const float density = SampleSmokeDensity(samplePosition) * depthTest;   
-                    totalDensity += density * stepSize;
+                    if (sampleDensity > 0.001)
+                    {
+                        float totalShadowDensity = 0.0f;
+                        float3 shadowSamplePosition = samplePosition;
+                        
+                        for (int shadowSampleIdx = 0; shadowSampleIdx < MAX_SHADOW_STEP_COUNT; ++shadowSampleIdx) {
+                            const float shadowSmokeDensity = SampleSmokeDensity(shadowSamplePosition, smokeSpawnPosition, distanceFromSmokeOrigin);
 
-                    baseTransmittance *= CalculateTransmittance(totalDensity);
-                    const float stepTransmittance = previousBaseTransmittance - baseTransmittance;
+                            if (shadowSmokeDensity < 0.001)
+                            {
+                                break;
+                            }
+                            
+                            totalShadowDensity += shadowSmokeDensity;
+                            shadowSamplePosition += shadowSampleOffset;
+                        }
 
-                    //const float sunTransmittance = RaymarchCalculateTransmittance(samplePosition, -_LightDir);
-                    //color3 += sunTransmittance * _LightColor * volumeAlbedo * stepTransmittance;
-                    color3 += stepTransmittance * volumeAlbedo * ambientColor;
+                        sampleDensity = saturate(sampleDensity * densityMultiplier);
+                        totalShadowDensity = saturate(totalShadowDensity * shadowDensityMultiplier);
+                        const float shadowTransmittance = CalculateTransmittance(totalShadowDensity * shadowDensityMultiplier);
 
-                    previousBaseTransmittance = baseTransmittance;
+                        const float3 absorbedLight = shadowTransmittance * sampleDensity * baseColor;
+                        color3 += absorbedLight * baseTransmittance * RayleighScattering(rayToSunAngleSquared);
+                        baseTransmittance *= 1 - sampleDensity;
+                    }
+
+                    samplePosition += sampleOffset;
                 }
 
-                return color3;
+                //return baseTransmittance * originalColor + (1.0 - baseTransmittance) * volumeAlbedo;
+                return float4(color3, baseTransmittance);
             }
 
             v2f vert (appdata v)
@@ -293,17 +320,13 @@ Shader "Hidden/RaymarchingSmoke"
                 float3 rayDirection = normalize(i.ray.xyz);
                 const float3 rayOrigin = _CameraWS;
 
-                //return float4(rayDirection, 1.0);
-
-                
-
                 float sceneDepth = LinearEyeDepth(SAMPLE_DEPTH_TEXTURE(_CameraDepthTexture, i.uv));
                 sceneDepth *= length(i.ray);
 
                 const float3 originalColor = tex2D(_MainTex, i.uv); // Color of the scene before this shader was run
 
-                const float3 raymarchedColor = RaymarchCalculatePixelColor(rayOrigin, rayDirection, sceneDepth, originalColor);
-                return float4(raymarchedColor, 1.0);
+                const float4 raymarchedColor = RaymarchCalculatePixelColor(rayOrigin, rayDirection, sceneDepth, originalColor);
+                return raymarchedColor;
             }
             ENDCG
         }

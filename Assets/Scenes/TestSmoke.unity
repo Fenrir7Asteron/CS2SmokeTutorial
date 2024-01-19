@@ -578,6 +578,9 @@ MonoBehaviour:
   zoneExtents: {x: 10, y: 2.5, z: 10}
   voxelSize: 0.5
   floodDistance: 32
+  smokeDensity: 21
+  shadowDensity: 7
+  showDebugVoxels: 0
 --- !u!4 &532276006
 Transform:
   m_ObjectHideFlags: 0

@@ -18,7 +18,8 @@ struct SmokeParameters
 {
     float4 spawnPosition; // xyz is spawn position
     float4 radius; // xyz are ellipsoid radii
-    float2 spawnTime; // x - spawn duration, y - spawn start timestamp 
+    float2 spawnTime; // x - spawn duration, y - spawn start timestamp
+    float2 density;
 };
 
 CBUFFER_START(_voxelGridParameters)

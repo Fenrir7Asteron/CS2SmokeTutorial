@@ -27,6 +27,7 @@ public struct SmokeParameters
     public Vector4 smokeSpawnPosition;
     public Vector4 smokeRadius;
     public Vector2 spawnTime;
+    public Vector2 density; // x - smoke density, y - shadow density
 }
 
 public class VoxelGrid : MonoBehaviour
@@ -41,6 +42,9 @@ public class VoxelGrid : MonoBehaviour
     public Vector3 zoneExtents;
     public float voxelSize;
     public int floodDistance = 16;
+    [SerializeField] private float smokeDensity = 1.0f;
+    [SerializeField] private float shadowDensity = 1.0f;
+    [SerializeField] private bool showDebugVoxels;
 
     private VoxelGridParameters _voxelGridParameters;
 
@@ -118,7 +122,8 @@ public class VoxelGrid : MonoBehaviour
         
         _smokeParameters = new SmokeParameters()
         {
-            spawnTime = new Vector2(-1, -1)
+            spawnTime = new Vector2(-1, -1),
+            density = new Vector2(smokeDensity, shadowDensity),
         };
     }
 
@@ -133,6 +138,7 @@ public class VoxelGrid : MonoBehaviour
         _smokeParameters.smokeSpawnPosition = new Vector4(spawnPosition.x, spawnPosition.y, spawnPosition.z, 0.0f);
         _smokeParameters.smokeRadius = new Vector4(smokeRadius.x, smokeRadius.y, smokeRadius.z, 0.0f);
         _smokeParameters.spawnTime = new Vector2(smokeSpawnDuration, Time.time);
+        _smokeParameters.density = new Vector2(smokeDensity, shadowDensity);
         
         RecalculateVoxelsPositionsAndVisibility();
     }
@@ -238,9 +244,8 @@ public class VoxelGrid : MonoBehaviour
             1);
 
         cubesBuffer.GetData(_data);
-
         
-        UpdateVoxelsVisualization(force);
+        UpdateVoxelsMeshes(force);
 
         cubesBuffer.Dispose();
         smokeBuffer.Dispose();
@@ -284,16 +289,15 @@ public class VoxelGrid : MonoBehaviour
         }
     }
 
-    private void UpdateVoxelsVisualization(bool force)
+    private void UpdateVoxelsMeshes(bool force)
     {
         for (int i = 0; i < _objects.Count; ++i)
         {
             ref VoxelData voxelDataData = ref _data[i];
-            bool isEnabled = voxelDataData.flags is {x: 1};
-            //bool isEnabled = voxelDataData.flags is {x: 1, z: > 0};
+            bool isEnabled = showDebugVoxels && voxelDataData.flags is {x: 1, z: > 0};
 
             _objects[i].transform.position = new Vector3(voxelDataData.position.x, voxelDataData.position.y, voxelDataData.position.z);
-            //_meshRenderers[i].enabled = isEnabled;
+            _meshRenderers[i].enabled = isEnabled;
         }
     }
     
@@ -560,6 +564,7 @@ public class VoxelGrid : MonoBehaviour
 
     public SmokeParameters GetSmokeParameters()
     {
+        _smokeParameters.density = new Vector2(smokeDensity, shadowDensity);
         return _smokeParameters;
     }
 
