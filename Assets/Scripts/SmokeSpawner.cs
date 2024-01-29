@@ -14,9 +14,13 @@ public class SmokeSpawner : MonoBehaviour
     {
         if (Input.GetMouseButtonDown(0))
         {
-            Ray screenRay = mainCamera.ScreenPointToRay(new Vector3(Input.mousePosition.x, Input.mousePosition.y, 1));
-            if (Physics.Raycast(screenRay.origin, screenRay. direction * 1000.0f, out RaycastHit hitInfo))
+            Transform cameraTransform = mainCamera.transform;
+            Vector3 origin = cameraTransform.position;
+            Vector3 direction = cameraTransform.forward;
+            Debug.Log(origin + " " + direction);
+            if (Physics.Raycast(origin, direction, out RaycastHit hitInfo, 1000.0f, LayerMask.GetMask("Default")))
             {
+                Debug.Log(hitInfo.point);
                 voxelGrid.SpawnSmoke(hitInfo.point, smokeEllipsoidRadii, smokeSpawnDuration);
             }
         }

@@ -42,10 +42,8 @@ float ease_smoke_progress(float x) {
     {
         return 2.0 * pow(x, 2);   
     }
-    else
-    {
-        return 1.0 - (0.025 / (0.2 * pow(x, 2)));
-    }
+
+    return 1.0 - (0.025 / (0.2 * pow(x, 2)));
 }
 
 uint GetVoxelIdx(uint x, uint y)

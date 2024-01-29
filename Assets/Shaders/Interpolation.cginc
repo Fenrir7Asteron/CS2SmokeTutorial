@@ -12,7 +12,7 @@ float interpolate2D(float v1, float v2, float v3, float v4, float2 p){
 float interpolate3D(float v1, float v2, float v3, float v4,
     float v5, float v6, float v7, float v8, float3 p)
 {
-    float s = interpolate2D(v1, v2, v3, v4, p.xy);
-    float t = interpolate2D(v5, v6, v7, v8, p.xy);
-    return interpolate1D(s, t, p.z);
+    float s = interpolate2D(v1, v2, v3, v4, p.xz);
+    float t = interpolate2D(v5, v6, v7, v8, p.xz);
+    return interpolate1D(s, t, p.y);
 }

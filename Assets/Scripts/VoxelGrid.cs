@@ -28,6 +28,7 @@ public struct SmokeParameters
     public Vector4 smokeRadius;
     public Vector2 spawnTime;
     public Vector2 density; // x - smoke density, y - shadow density
+    public Vector2 coefficients; // x - absorption coefficient, y - scattering coefficient
 }
 
 public class VoxelGrid : MonoBehaviour
@@ -44,6 +45,8 @@ public class VoxelGrid : MonoBehaviour
     public int floodDistance = 16;
     [SerializeField] private float smokeDensity = 1.0f;
     [SerializeField] private float shadowDensity = 1.0f;
+    [SerializeField, Range(0.0f, 1.0f)] private float absorptionCoefficient = 1.0f;
+    public float ScatteringCoefficient { get => 1.0f - absorptionCoefficient; }
     [SerializeField] private bool showDebugVoxels;
 
     private VoxelGridParameters _voxelGridParameters;
@@ -124,6 +127,7 @@ public class VoxelGrid : MonoBehaviour
         {
             spawnTime = new Vector2(-1, -1),
             density = new Vector2(smokeDensity, shadowDensity),
+            coefficients = new Vector2(absorptionCoefficient, ScatteringCoefficient),
         };
     }
 
@@ -139,6 +143,7 @@ public class VoxelGrid : MonoBehaviour
         _smokeParameters.smokeRadius = new Vector4(smokeRadius.x, smokeRadius.y, smokeRadius.z, 0.0f);
         _smokeParameters.spawnTime = new Vector2(smokeSpawnDuration, Time.time);
         _smokeParameters.density = new Vector2(smokeDensity, shadowDensity);
+        _smokeParameters.coefficients = new Vector2(absorptionCoefficient, ScatteringCoefficient);
         
         RecalculateVoxelsPositionsAndVisibility();
     }
@@ -565,6 +570,7 @@ public class VoxelGrid : MonoBehaviour
     public SmokeParameters GetSmokeParameters()
     {
         _smokeParameters.density = new Vector2(smokeDensity, shadowDensity);
+        _smokeParameters.coefficients = new Vector2(absorptionCoefficient, ScatteringCoefficient);
         return _smokeParameters;
     }
 

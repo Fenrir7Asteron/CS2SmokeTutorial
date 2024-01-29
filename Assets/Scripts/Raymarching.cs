@@ -1,10 +1,13 @@
 ﻿using UnityEngine;
-using UnityEngine.Experimental.Rendering;
 
-[ImageEffectAllowedInSceneView]
 public class Raymarching : MonoBehaviour 
 {
+    [SerializeField] private RenderTexture smokeColorTextureLowRes;
+    [SerializeField] private RenderTexture smokeMaskTextureLowRes;
+    [SerializeField] private RenderTexture smokeColorTextureFullRes;
+    [SerializeField] private RenderTexture smokeMaskTextureFullRes;
     [SerializeField] private Material raymarchingMaterial;
+    [SerializeField] private Material blendingMaterial;
     [SerializeField] private Light sunLight;
     [SerializeField] private VoxelGrid voxelGrid;
     
@@ -31,7 +34,8 @@ public class Raymarching : MonoBehaviour
             }
 
 #if UNITY_EDITOR
-            _currentCamera = GetSceneEditorCamera();
+            _currentCamera = Camera.main;
+            //_currentCamera = GetSceneEditorCamera();
 #else
             _currentCamera = Camera.main;
 #endif
@@ -86,7 +90,15 @@ public class Raymarching : MonoBehaviour
         raymarchingMaterial.SetConstantBuffer(VoxelGridParametersPropertyID, voxelGridConstantBuffer, 0,
             System.Runtime.InteropServices.Marshal.SizeOf(typeof(VoxelGridParameters)));
 
-        CustomGraphicsBlit(source, destination, raymarchingMaterial, 0); // use given effect shader as image effect
+        CustomGraphicsBlit(source, new []{smokeColorTextureLowRes, smokeMaskTextureLowRes}, raymarchingMaterial, 0); // use given effect shader as image effect
+        
+        Graphics.Blit(smokeColorTextureLowRes, smokeColorTextureFullRes);
+        Graphics.Blit(smokeMaskTextureLowRes, smokeMaskTextureFullRes);
+        
+        blendingMaterial.SetTexture("_MainTex", source);
+        blendingMaterial.SetTexture("_SecondTex", smokeColorTextureFullRes);
+        blendingMaterial.SetTexture("_MaskTex", smokeMaskTextureFullRes);
+        Graphics.Blit(source, destination, blendingMaterial);
         
         voxelDataBuffer.Dispose();
         smokeParametersBuffer.Dispose();
@@ -137,9 +149,21 @@ public class Raymarching : MonoBehaviour
     /// 
     /// \warning You may need to account for flipped UVs on DirectX machines due to differing UV semantics
     ///          between OpenGL and DirectX.  Use the shader define UNITY_UV_STARTS_AT_TOP to account for this.
-    static void CustomGraphicsBlit(RenderTexture source, RenderTexture dest, Material fxMaterial, int passNr)
+    static void CustomGraphicsBlit(RenderTexture source, RenderTexture[] destinations, Material fxMaterial, int passNr)
     {
-        RenderTexture.active = dest;
+        RenderBuffer[] rb = new RenderBuffer[destinations.Length];
+        
+        // Set targets needs the color buffers so make a array from
+        // each textures buffer.
+        for(int i = 0; i < destinations.Length; i++)
+            rb[i] = destinations[i].colorBuffer;
+        
+        //Set the targets to render into.
+        //Will use the depth buffer of the
+        //first render texture provided.
+        Graphics.SetRenderTarget(rb, destinations[0].depthBuffer);
+
+        GL.Clear(true, true, Color.clear);
 
         fxMaterial.SetTexture("_MainTex", source);
 
