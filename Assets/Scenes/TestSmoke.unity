@@ -743,8 +743,6 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   computeShader: {fileID: 7200000, guid: 1e4559e529f289c47a82453908c5d193, type: 3}
-  mesh: {fileID: 10202, guid: 0000000000000000e000000000000000, type: 0}
-  material: {fileID: 2100000, guid: 519d4b72b2a69bc4aaabb6d2c81f2b49, type: 2}
   zoneExtents: {x: 10, y: 2.5, z: 10}
   voxelSize: 0.5
   floodDistance: 32
@@ -752,6 +750,8 @@ MonoBehaviour:
   shadowDensity: 5.2
   absorptionCoefficient: 0.302
   showDebugVoxels: 0
+  debugMesh: {fileID: 10202, guid: 0000000000000000e000000000000000, type: 0}
+  debugMaterial: {fileID: 2100000, guid: 519d4b72b2a69bc4aaabb6d2c81f2b49, type: 2}
 --- !u!4 &532276006
 Transform:
   m_ObjectHideFlags: 0

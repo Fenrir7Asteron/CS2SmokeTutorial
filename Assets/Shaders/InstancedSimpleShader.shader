@@ -1,7 +1,6 @@
 Shader "Instanced/Simple" {
   //show values to edit in inspector
   Properties{
-    [PerRendererData] _Color ("Color", Color) = (0, 0, 0, 1)
   }
 
   SubShader{
@@ -10,8 +9,12 @@ Shader "Instanced/Simple" {
 
     Pass{
       CGPROGRAM
+// Upgrade NOTE: excluded shader from DX11, OpenGL ES 2.0 because it uses unsized arrays
+//#pragma exclude_renderers d3d11 gles
       //allow instancing
       #pragma multi_compile_instancing
+      #pragma target 4.5
+      #pragma instancing_options procedural:ConfigureProcedural
 
       //shader functions
       #pragma vertex vert
@@ -29,12 +32,29 @@ Shader "Instanced/Simple" {
       //per vertex data that gets passed from the vertex to the fragment function
       struct v2f{
         float4 position : SV_POSITION;
+        float4 color : TEXCOORD0;
         UNITY_VERTEX_INPUT_INSTANCE_ID
       };
 
-      UNITY_INSTANCING_BUFFER_START(Props)
-        UNITY_DEFINE_INSTANCED_PROP(float4, _Color)
-      UNITY_INSTANCING_BUFFER_END(Props)
+      struct Cube
+      {
+          float4 position;
+          float4 color;
+          int3 flags; // x - isVisible, y - is occupied by static mesh, z - flood fill remaining power
+      };
+
+      StructuredBuffer<Cube> _voxels;
+      float _voxelSize;
+
+      void ConfigureProcedural()
+      {
+        float3 position = _voxels[unity_InstanceID].position.xyz;
+        float isVisible = float(_voxels[unity_InstanceID].flags.x);
+
+        unity_ObjectToWorld = 0.0;
+				unity_ObjectToWorld._m03_m13_m23_m33 = float4(position, 1.0);
+				unity_ObjectToWorld._m00_m11_m22 = _voxelSize * step(0.1, isVisible);
+      }
 
       v2f vert(appdata v){
         v2f o;
@@ -45,16 +65,15 @@ Shader "Instanced/Simple" {
 
         //calculate the position in clip space to render the object
         o.position = UnityObjectToClipPos(v.vertex);
+        o.color = _voxels[unity_InstanceID].color;
+        
         return o;
       }
 
       fixed4 frag(v2f i) : SV_TARGET{
           //setup instance id
           UNITY_SETUP_INSTANCE_ID(i);
-          //get _Color Property from buffer
-          fixed4 color = UNITY_ACCESS_INSTANCED_PROP(Props, _Color);
-        //Return the color the Object is rendered in
-        return color;
+        return i.color;
       }
 
       ENDCG

@@ -54,9 +54,9 @@ public class Raymarching : MonoBehaviour
             return;
         }
 
-        VoxelData[] voxelData = voxelGrid.GetVoxelData();
+        ComputeBuffer voxelBuffer = voxelGrid.GetVoxelBuffer();
 
-        if (voxelData == null)
+        if (voxelBuffer == null)
         {
             Graphics.Blit(source, destination); // do nothing
             return;
@@ -71,11 +71,8 @@ public class Raymarching : MonoBehaviour
         raymarchingMaterial.SetVector(LightColorPropertyID, sunLight ? sunLight.color : Vector3.one);
         raymarchingMaterial.SetFloat(MouseYPositionPropertyID, Mathf.Clamp01(Input.mousePosition.y / Screen.height));
         raymarchingMaterial.SetInt(MaxFloodValuePropertyID, voxelGrid.GetMaxFloodValue());
-
-        GraphicsBuffer voxelDataBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, voxelData.Length,
-            System.Runtime.InteropServices.Marshal.SizeOf(typeof(VoxelData)));
-        voxelDataBuffer.SetData(voxelData);
-        raymarchingMaterial.SetBuffer(VoxelDataPropertyID, voxelDataBuffer);
+        
+        raymarchingMaterial.SetBuffer(VoxelDataPropertyID, voxelBuffer);
 
         GraphicsBuffer smokeParametersBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, 1,
             System.Runtime.InteropServices.Marshal.SizeOf(typeof(SmokeParameters)));
@@ -100,7 +97,6 @@ public class Raymarching : MonoBehaviour
         blendingMaterial.SetTexture("_MaskTex", smokeMaskTextureFullRes);
         Graphics.Blit(source, destination, blendingMaterial);
         
-        voxelDataBuffer.Dispose();
         smokeParametersBuffer.Dispose();
         voxelGridConstantBuffer.Dispose();
     }

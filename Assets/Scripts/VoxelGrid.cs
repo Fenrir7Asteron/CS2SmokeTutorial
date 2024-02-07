@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using UnityEngine;
-using UnityEngine.Rendering;
+using UnityEngine.Serialization;
 using UnityEngine.Windows;
 
 public struct VoxelData
@@ -38,8 +38,6 @@ public class VoxelGrid : MonoBehaviour
     private const string FloodFillKernel = "ComputeFloodFill";
     
     public ComputeShader computeShader;
-    public Mesh mesh;
-    public Material material;
     public Vector3 zoneExtents;
     public float voxelSize;
     public int floodDistance = 16;
@@ -48,20 +46,20 @@ public class VoxelGrid : MonoBehaviour
     [SerializeField, Range(0.0f, 1.0f)] private float absorptionCoefficient = 1.0f;
     public float ScatteringCoefficient { get => 1.0f - absorptionCoefficient; }
     [SerializeField] private bool showDebugVoxels;
+    public Mesh debugMesh;
+    public Material debugMaterial;
 
     private VoxelGridParameters _voxelGridParameters;
 
 
     private VoxelData[] _data;
-    private MaterialPropertyBlock[] _propertyBlocks;
-    private List<GameObject> _objects;
-    private List<MeshRenderer> _meshRenderers;
 
-    private static readonly int CubesPropertyID = Shader.PropertyToID("_voxels");
+    private static readonly int VoxelsPropertyID = Shader.PropertyToID("_voxels");
     private static readonly int VoxelGridParametersPropertyID = Shader.PropertyToID("_voxelGridParameters");
     private static readonly int SmokeParametersPropertyID = Shader.PropertyToID("_smokeParameters");
-    private static readonly int ColorPropertyID = Shader.PropertyToID("_Color");
+    private static readonly int VoxelSizePropertyID = Shader.PropertyToID("_voxelSize");
     private ComputeBuffer _voxelGridConstantBuffer;
+    private ComputeBuffer _voxelsBuffer;
     private SmokeParameters _smokeParameters;
     private static readonly string VoxelizedSceneJsonPath = Application.streamingAssetsPath + "/VoxelizedSceneOccupation.json";
 
@@ -80,7 +78,7 @@ public class VoxelGrid : MonoBehaviour
             occupiedVoxels = new List<int>();
         }
         
-        CreateCubes(occupiedVoxels);
+        InitVoxelGrid(occupiedVoxels);
     }
 
     public void OnDestroy()
@@ -91,9 +89,20 @@ public class VoxelGrid : MonoBehaviour
     public void Update()
     {
         RecalculateVoxelsPositionsAndVisibility();
+
+        if (showDebugVoxels)
+        {
+            Bounds bounds = new Bounds(_voxelGridParameters.VoxelGridCenter,
+                _voxelGridParameters.VoxelGridExtents * 2.0f);
+            
+            debugMaterial.SetBuffer(VoxelsPropertyID, _voxelsBuffer);
+            debugMaterial.SetFloat(VoxelSizePropertyID, voxelSize);
+            
+            Graphics.DrawMeshInstancedProcedural(debugMesh, 0, debugMaterial, bounds, _data.Length);
+        }
     }
 
-    private void CreateCubes(in List<int> occupiedVoxels)
+    private void InitVoxelGrid(in List<int> occupiedVoxels)
     {
         Vector3 zoneSizes = zoneExtents * 2 / voxelSize;
 
@@ -105,18 +114,29 @@ public class VoxelGrid : MonoBehaviour
         _voxelGridParameters.VoxelGridCenter = new Vector4(voxelGridCenter.x, voxelGridCenter.y, voxelGridCenter.z);
 
         Debug.Log($"Zone sizes integer: {_voxelGridParameters.VoxelCountsPerAxis}, voxel count: {_voxelGridParameters.CubeCount}");
-        _objects = new List<GameObject>(_voxelGridParameters.CubeCount);
-        _meshRenderers = new List<MeshRenderer>(_voxelGridParameters.CubeCount);
         _data = new VoxelData[_voxelGridParameters.CubeCount];
-        _propertyBlocks = new MaterialPropertyBlock[_voxelGridParameters.CubeCount];
 
         for (int voxelIdx = 0; voxelIdx < _voxelGridParameters.CubeCount; ++voxelIdx)
         {
             int isOccupied = occupiedVoxels.Contains(voxelIdx) ? 1 : 0;
-            CreateCube(voxelIdx, isOccupied);
-        }
+            
+            VoxelData voxelDataData = new VoxelData()
+            {
+                position = new Vector4(),
+                color = Color.magenta,
+                flags = new Vector3Int(0, isOccupied, 0),
+            };
         
-        _voxelGridConstantBuffer = new ComputeBuffer(1, System.Runtime.InteropServices.Marshal.SizeOf(typeof(VoxelGridParameters)),
+            _data[voxelIdx] = voxelDataData;
+        }
+
+
+        _voxelsBuffer = new ComputeBuffer(_data.Length,
+            System.Runtime.InteropServices.Marshal.SizeOf(typeof(VoxelData)));
+        _voxelsBuffer.SetData(_data);
+
+        _voxelGridConstantBuffer = new ComputeBuffer(1, 
+            System.Runtime.InteropServices.Marshal.SizeOf(typeof(VoxelGridParameters)),
             ComputeBufferType.Constant);
         _voxelGridConstantBuffer.SetData(new VoxelGridParameters[] {_voxelGridParameters});
 
@@ -138,6 +158,8 @@ public class VoxelGrid : MonoBehaviour
         int voxelIdx = CalculateVoxelIdxByWorldPosition(spawnPosition, voxelGridCenter, zoneExtents);
 
         _data[voxelIdx].flags.z = floodDistance;
+        
+        _voxelsBuffer.SetData(_data);
 
         _smokeParameters.smokeSpawnPosition = new Vector4(spawnPosition.x, spawnPosition.y, spawnPosition.z, 0.0f);
         _smokeParameters.smokeRadius = new Vector4(smokeRadius.x, smokeRadius.y, smokeRadius.z, 0.0f);
@@ -173,37 +195,16 @@ public class VoxelGrid : MonoBehaviour
         
         return voxelIdx;
     }
-
-    private void CreateCube(int cubeIdx, int isOccupied)
+    
+    private Vector3 VoxelIdxToVoxelPosition(int voxelIdx, Vector2Int voxelCounts, Vector3 voxelZoneCenter,
+        Vector3 voxelZoneExtents, Vector3 voxelSize)
     {
-        GameObject cube = new GameObject($"Cube {cubeIdx}", typeof(MeshFilter), typeof(MeshRenderer));
-        cube.GetComponent<MeshFilter>().mesh = mesh;
-        
-        MeshRenderer meshRenderer = cube.GetComponent<MeshRenderer>();
-        meshRenderer.shadowCastingMode = ShadowCastingMode.Off;
-        meshRenderer.receiveShadows = false;
-        meshRenderer.sharedMaterial = material;
-        meshRenderer.enabled = false;
-
-        Color color = Color.magenta;
-        MaterialPropertyBlock materialPropertyBlock = new MaterialPropertyBlock();
-        materialPropertyBlock.SetColor(ColorPropertyID, color);
-        meshRenderer.SetPropertyBlock(materialPropertyBlock);
-
-        cube.transform.localScale *= voxelSize;
-        
-        _objects.Add(cube);
-        _meshRenderers.Add(meshRenderer);
-
-        VoxelData voxelDataData = new VoxelData()
-        {
-            position = Vector4.zero,
-            color = color,
-            flags = new Vector3Int(0, isOccupied, 0),
-        };
-        
-        _data[cubeIdx] = voxelDataData;
-        _propertyBlocks[cubeIdx] = materialPropertyBlock;
+        float xPos = voxelIdx % voxelCounts.x;
+        float yPos = (voxelIdx / voxelCounts.x) % voxelCounts.y;
+        float zPos = voxelIdx / (voxelCounts.x * voxelCounts.y);
+        return Vector3.Scale(new Vector3(xPos, yPos, zPos), voxelSize) 
+            + voxelSize * 0.5f 
+            + voxelZoneCenter - voxelZoneExtents;
     }
 
     private void RecalculateVoxelsPositionsAndVisibility(bool force = false)
@@ -213,14 +214,10 @@ public class VoxelGrid : MonoBehaviour
             return;
         }
         
-        ComputeBuffer cubesBuffer = new ComputeBuffer(_data.Length,
-            System.Runtime.InteropServices.Marshal.SizeOf(typeof(VoxelData)));
-        cubesBuffer.SetData(_data);
-        
         // Compute Flood fill
         int kernelIndex = computeShader.FindKernel(FloodFillKernel);
 
-        computeShader.SetBuffer(kernelIndex, CubesPropertyID, cubesBuffer);
+        computeShader.SetBuffer(kernelIndex, VoxelsPropertyID, _voxelsBuffer);
         computeShader.SetConstantBuffer(VoxelGridParametersPropertyID, _voxelGridConstantBuffer, 0,
             System.Runtime.InteropServices.Marshal.SizeOf(typeof(VoxelGridParameters)));
 
@@ -232,7 +229,7 @@ public class VoxelGrid : MonoBehaviour
         // Compute positions
         kernelIndex = computeShader.FindKernel(SmokeVoxelPositionsKernel);
 
-        computeShader.SetBuffer(kernelIndex, CubesPropertyID, cubesBuffer);
+        computeShader.SetBuffer(kernelIndex, VoxelsPropertyID, _voxelsBuffer);
         computeShader.SetConstantBuffer(VoxelGridParametersPropertyID, _voxelGridConstantBuffer, 0,
             System.Runtime.InteropServices.Marshal.SizeOf(typeof(VoxelGridParameters)));
         
@@ -247,12 +244,7 @@ public class VoxelGrid : MonoBehaviour
             _voxelGridParameters.CubeCount / 8 / 8,
             _voxelGridParameters.CubeCount / 8 / 8,
             1);
-
-        cubesBuffer.GetData(_data);
         
-        UpdateVoxelsMeshes(force);
-
-        cubesBuffer.Dispose();
         smokeBuffer.Dispose();
     }
 
@@ -263,13 +255,9 @@ public class VoxelGrid : MonoBehaviour
 
     private void RandomizeVoxelColors()
     {
-        ComputeBuffer cubesBuffer = new ComputeBuffer(_data.Length, 
-            System.Runtime.InteropServices.Marshal.SizeOf(typeof(VoxelData)));
-        cubesBuffer.SetData(_data);
-
         int kernelIndex = computeShader.FindKernel(SmokeVoxelColorsKernel);
         
-        computeShader.SetBuffer(kernelIndex, CubesPropertyID, cubesBuffer);
+        computeShader.SetBuffer(kernelIndex, VoxelsPropertyID, _voxelsBuffer);
         computeShader.SetConstantBuffer(VoxelGridParametersPropertyID, _voxelGridConstantBuffer, 0, 
             System.Runtime.InteropServices.Marshal.SizeOf(typeof(VoxelGridParameters)));
 
@@ -278,44 +266,14 @@ public class VoxelGrid : MonoBehaviour
             _voxelGridParameters.CubeCount / 8 / 8, 
             1);
 
-        cubesBuffer.GetData(_data);
-
-        UpdateVoxelsColors();
-        
-        cubesBuffer.Dispose();
+        _voxelsBuffer.GetData(_data);
     }
 
     private void CleanAllVoxels()
     {
-        for (int i = 0; i < _meshRenderers.Count; i++)
+        for (int i = 0; i < _data.Length; i++)
         {
             _data[i].flags = new Vector3Int(0, _data[i].flags.y, 0);
-            _meshRenderers[i].enabled = false;
-        }
-    }
-
-    private void UpdateVoxelsMeshes(bool force)
-    {
-        for (int i = 0; i < _objects.Count; ++i)
-        {
-            ref VoxelData voxelDataData = ref _data[i];
-            bool isEnabled = showDebugVoxels && voxelDataData.flags is {x: 1, z: > 0};
-
-            _objects[i].transform.position = new Vector3(voxelDataData.position.x, voxelDataData.position.y, voxelDataData.position.z);
-            _meshRenderers[i].enabled = isEnabled;
-        }
-    }
-    
-    private void UpdateVoxelsColors()
-    {
-        for (int i = 0; i < _objects.Count; ++i)
-        {
-            ref VoxelData voxelDataData = ref _data[i];
-            
-            _propertyBlocks[i].SetColor(ColorPropertyID, voxelDataData.color);
-
-            MeshRenderer meshRenderer = _meshRenderers[i];
-            meshRenderer.SetPropertyBlock(_propertyBlocks[i]);
         }
     }
 
@@ -341,6 +299,8 @@ public class VoxelGrid : MonoBehaviour
         {
             _data[voxelIdx].flags.y = 1;
         }
+        
+        _voxelsBuffer.SetData(_data);
 
         string json = JsonUtility.ToJson(occupiedVoxels);
         File.WriteAllBytes(VoxelizedSceneJsonPath, Encoding.ASCII.GetBytes(json));
@@ -352,10 +312,15 @@ public class VoxelGrid : MonoBehaviour
         
         float voxelExtent = voxelSize * 0.5f;
 
-        for (int voxelIdx = 0; voxelIdx < _objects.Count; ++voxelIdx)
+        for (int voxelIdx = 0; voxelIdx < _data.Length; ++voxelIdx)
         {
             List<Vector3> voxelVertices = new List<Vector3>();
-            Vector3 voxelPosition = _objects[voxelIdx].transform.position;
+            Vector3 voxelPosition = VoxelIdxToVoxelPosition(
+                voxelIdx, 
+                new Vector2Int(_voxelGridParameters.VoxelCountsPerAxis.x, _voxelGridParameters.VoxelCountsPerAxis.y),
+                _voxelGridParameters.VoxelGridCenter,
+                _voxelGridParameters.VoxelGridExtents, 
+                _voxelGridParameters.VoxelSize);
                         
             voxelVertices.Add(voxelPosition + (Vector3.right + Vector3.up + Vector3.forward) * voxelExtent);
             voxelVertices.Add(voxelPosition + (Vector3.right + Vector3.up + Vector3.back) * voxelExtent);
@@ -557,9 +522,9 @@ public class VoxelGrid : MonoBehaviour
         Gizmos.DrawWireCube(transform.position, zoneExtents * 2.0f);
     }
 
-    public VoxelData[] GetVoxelData()
+    public ComputeBuffer GetVoxelBuffer()
     {
-        return _data;
+        return _voxelsBuffer;
     }
 
     public VoxelGridParameters GetGridParameters()
