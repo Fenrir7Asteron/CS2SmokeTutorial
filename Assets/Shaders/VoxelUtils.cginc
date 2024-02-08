@@ -1,3 +1,5 @@
+static float3 _voxelGridOffset = float3(0, 0, 0);
+
 int3 VoxelIdxToInt3(uint voxelIdx, const int2 voxelCounts)
 {
     const int x = voxelIdx % voxelCounts.x;
@@ -16,15 +18,12 @@ float insideBox3D(float3 v, float3 bottomLeft, float3 topRight) {
     return s.x * s.y * s.z; 
 }
 
-float3 VoxelIdxToVoxelPosition(const uint voxelIdx, const int2 voxelCounts, const float3 voxelZoneCenter,
-    const float3 voxelZoneExtents, const float3 voxelSize)
+float3 VoxelIdxToVoxelPosition(const uint voxelIdx, const int2 voxelCounts, const float3 voxelSize)
 {
     const float xPos = voxelIdx % voxelCounts.x;
     const float yPos = (voxelIdx / voxelCounts.x) % voxelCounts.y;
     const float zPos = voxelIdx / (voxelCounts.x * voxelCounts.y);
-    const float3 voxelSizeVector = voxelSize;
-    return float3(xPos, yPos, zPos) * voxelSizeVector + voxelSizeVector * 0.5
-        + voxelZoneCenter - voxelZoneExtents;
+    return float3(xPos, yPos, zPos) * voxelSize + _voxelGridOffset;
 }
 
 // Output x - isIntersected, y - maxDistance, z - minDistance

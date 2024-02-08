@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using UnityEngine;
-using UnityEngine.Serialization;
 using UnityEngine.Windows;
 
 public struct VoxelData
@@ -15,11 +14,11 @@ public struct VoxelData
 
 public struct VoxelGridParameters
 {
-    public Vector4 VoxelSize;
     public int CubeCount;
     public Vector3Int VoxelCountsPerAxis;
     public Vector4 VoxelGridExtents;
     public Vector4 VoxelGridCenter;
+    public float VoxelSize;
 }
 
 public struct SmokeParameters
@@ -34,6 +33,7 @@ public struct SmokeParameters
 public class VoxelGrid : MonoBehaviour
 {
     private const string SmokeVoxelPositionsKernel = "ComputeSmokeVoxelPositions";
+    private const string SmokeVoxelVisibilityKernel = "ComputeSmokeVoxelVisibility";
     private const string SmokeVoxelColorsKernel = "ComputeSmokeVoxelColors";
     private const string FloodFillKernel = "ComputeFloodFill";
     
@@ -88,7 +88,7 @@ public class VoxelGrid : MonoBehaviour
 
     public void Update()
     {
-        RecalculateVoxelsPositionsAndVisibility();
+        RecalculateVoxelsVisibility();
 
         if (showDebugVoxels)
         {
@@ -106,12 +106,12 @@ public class VoxelGrid : MonoBehaviour
     {
         Vector3 zoneSizes = zoneExtents * 2 / voxelSize;
 
-        _voxelGridParameters.VoxelSize = Vector4.one * voxelSize;
         _voxelGridParameters.VoxelCountsPerAxis = new Vector3Int((int) zoneSizes.x, (int) zoneSizes.y, (int) zoneSizes.z);
         _voxelGridParameters.CubeCount = _voxelGridParameters.VoxelCountsPerAxis.x * _voxelGridParameters.VoxelCountsPerAxis.y * _voxelGridParameters.VoxelCountsPerAxis.z;
         _voxelGridParameters.VoxelGridExtents = new Vector4(zoneExtents.x, zoneExtents.y, zoneExtents.z);
         Vector3 voxelGridCenter = transform.position;
         _voxelGridParameters.VoxelGridCenter = new Vector4(voxelGridCenter.x, voxelGridCenter.y, voxelGridCenter.z);
+        _voxelGridParameters.VoxelSize = voxelSize;
 
         Debug.Log($"Zone sizes integer: {_voxelGridParameters.VoxelCountsPerAxis}, voxel count: {_voxelGridParameters.CubeCount}");
         _data = new VoxelData[_voxelGridParameters.CubeCount];
@@ -140,7 +140,8 @@ public class VoxelGrid : MonoBehaviour
             ComputeBufferType.Constant);
         _voxelGridConstantBuffer.SetData(new VoxelGridParameters[] {_voxelGridParameters});
 
-        RecalculateVoxelsPositionsAndVisibility(true);
+        ComputeVoxelsPositions();
+        RecalculateVoxelsVisibility();
         RandomizeVoxelColors();
         
         _smokeParameters = new SmokeParameters()
@@ -167,7 +168,7 @@ public class VoxelGrid : MonoBehaviour
         _smokeParameters.density = new Vector2(smokeDensity, shadowDensity);
         _smokeParameters.coefficients = new Vector2(absorptionCoefficient, ScatteringCoefficient);
         
-        RecalculateVoxelsPositionsAndVisibility();
+        RecalculateVoxelsVisibility();
     }
 
     private int CalculateVoxelIdxByWorldPosition(in Vector3 worldPosition, in Vector3 voxelGridCenter, in Vector3 extents)
@@ -197,19 +198,38 @@ public class VoxelGrid : MonoBehaviour
     }
     
     private Vector3 VoxelIdxToVoxelPosition(int voxelIdx, Vector2Int voxelCounts, Vector3 voxelZoneCenter,
-        Vector3 voxelZoneExtents, Vector3 voxelSize)
+        Vector3 voxelZoneExtents, float voxelSize)
     {
         float xPos = voxelIdx % voxelCounts.x;
         float yPos = (voxelIdx / voxelCounts.x) % voxelCounts.y;
         float zPos = voxelIdx / (voxelCounts.x * voxelCounts.y);
-        return Vector3.Scale(new Vector3(xPos, yPos, zPos), voxelSize) 
-            + voxelSize * 0.5f 
+        return new Vector3(xPos, yPos, zPos) * voxelSize
+            + Vector3.one * voxelSize * 0.5f 
             + voxelZoneCenter - voxelZoneExtents;
     }
-
-    private void RecalculateVoxelsPositionsAndVisibility(bool force = false)
+    
+    private void ComputeVoxelsPositions()
     {
-        if (!IsSmokeSpawned() && !force) // smoke was not created yet
+        if (!IsSmokeSpawned())
+        {
+            return;
+        }
+        
+        int kernelIndex = computeShader.FindKernel(SmokeVoxelPositionsKernel);
+
+        computeShader.SetBuffer(kernelIndex, VoxelsPropertyID, _voxelsBuffer);
+        computeShader.SetConstantBuffer(VoxelGridParametersPropertyID, _voxelGridConstantBuffer, 0,
+            System.Runtime.InteropServices.Marshal.SizeOf(typeof(VoxelGridParameters)));
+
+        computeShader.Dispatch(kernelIndex,
+            _voxelGridParameters.CubeCount / 8 / 8,
+            _voxelGridParameters.CubeCount / 8 / 8,
+            1);
+    }
+
+    private void RecalculateVoxelsVisibility()
+    {
+        if (!IsSmokeSpawned())
         {
             return;
         }
@@ -226,8 +246,8 @@ public class VoxelGrid : MonoBehaviour
             _voxelGridParameters.CubeCount / 8 / 8,
             1);
         
-        // Compute positions
-        kernelIndex = computeShader.FindKernel(SmokeVoxelPositionsKernel);
+        // Compute voxel visibility
+        kernelIndex = computeShader.FindKernel(SmokeVoxelVisibilityKernel);
 
         computeShader.SetBuffer(kernelIndex, VoxelsPropertyID, _voxelsBuffer);
         computeShader.SetConstantBuffer(VoxelGridParametersPropertyID, _voxelGridConstantBuffer, 0,

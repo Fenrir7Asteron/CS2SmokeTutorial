@@ -67,10 +67,10 @@ Shader "Hidden/RaymarchingSmoke"
             };
 
             CBUFFER_START(_voxelGridParameters)
-                float4 _voxelSize;
                 int4 _voxelCounts; // x stores total voxelCount, yzw store voxel counts for each xyz axis 
                 float4 _voxelZoneExtents; // xyz store zone extents
                 float4 _voxelZoneCenter; // xyz store zone center
+                float _voxelSize;
             CBUFFER_END
 
             StructuredBuffer<Cube> _smokeVoxels;
@@ -121,13 +121,13 @@ Shader "Hidden/RaymarchingSmoke"
             }
 
             static int3 offsets[8] = {
-                int3(-1, -1, -1),
-                int3(1, -1, -1),
-                int3(-1, -1, 1),
-                int3(1, -1, 1),
-                int3(-1, 1, -1),
-                int3(1, 1, -1),
-                int3(-1, 1, 1),
+                int3(0, 0, 0),
+                int3(1, 0, 0),
+                int3(0, 0, 1),
+                int3(1, 0, 1),
+                int3(0, 1, 0),
+                int3(1, 1, 0),
+                int3(0, 1, 1),
                 int3(1, 1, 1),
             };
 
@@ -187,26 +187,24 @@ Shader "Hidden/RaymarchingSmoke"
                 const float falloff = max(0.7, smoothstep(0.01, 1.0, (distance + noise)));
                 
                 const int3 voxelIdx3D = VoxelIdxToInt3(voxelIdx, _voxelCounts.yz);
-                int densities[8];
+                float densities[8];
+                const float3 bottomLeftCorner = float3(0.0, 0.0, 0.0);
                 for (int i = 0; i < 8; ++i)
                 {
                     const int3 neighbourIdx3D = voxelIdx3D + offsets[i];
-                    const float isInsideVoxelGrid = insideBox3D(neighbourIdx3D, float3(0.0, 0.0, 0.0), _voxelCounts.yzw);
+                    const float isInsideVoxelGrid = insideBox3D(neighbourIdx3D, bottomLeftCorner, _voxelCounts.yzw);
                 
                     const uint neighbourVoxelIdx = VoxelIdx3DToVoxelIdx(neighbourIdx3D, _voxelCounts.yz);
                 
                     densities[i] = _smokeVoxels[neighbourVoxelIdx].flags.x * isInsideVoxelGrid;
                 }
                 
-                
-                const int3 referenceIdx3D = voxelIdx3D + offsets[0];
-                const uint referenceVoxelIdx = VoxelIdx3DToVoxelIdx(referenceIdx3D, _voxelCounts.yz);
-                const float3 voxelPosition = VoxelIdxToVoxelPosition(referenceVoxelIdx, _voxelCounts.yz, _voxelZoneCenter.xyz, _voxelZoneExtents.xyz, _voxelSize.xxx);
-                const float3 normalizedOffsetFromVoxelPosition = (worldPosition - voxelPosition) / (_voxelSize * 2.0).xxx;
-                const float density = saturate(interpolate3D(densities[0], densities[1], densities[2], densities[3],
+                const float3 voxelPosition = v0.position;
+                const float3 normalizedOffsetFromVoxelPosition = (worldPosition - voxelPosition + _voxelSize.xxx * 0.5) / (_voxelSize);
+                float density = saturate(interpolate3D(densities[0], densities[1], densities[2], densities[3],
                     densities[4], densities[5], densities[6], densities[7], normalizedOffsetFromVoxelPosition));
 
-                //const float density = v0.flags.x;
+                //density = v0.flags.x;
 
                 return density
                     * isValidVoxelIdx 
@@ -298,11 +296,6 @@ Shader "Hidden/RaymarchingSmoke"
                         for (int shadowSampleIdx = 0; shadowSampleIdx < MAX_SHADOW_STEP_COUNT; ++shadowSampleIdx) {
                             const float shadowSmokeDensity = SampleSmokeDensity(shadowSamplePosition,
                                 smokeSpawnPosition, distanceFromSmokeOrigin, smokeRadius);
-
-                            if (shadowSmokeDensity < 0.001)
-                            {
-                                break;
-                            }
                             
                             totalShadowDensity += shadowSmokeDensity;
                             shadowSamplePosition += shadowSampleOffset;

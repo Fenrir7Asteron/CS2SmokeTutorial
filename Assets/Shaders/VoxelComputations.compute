@@ -1,11 +1,12 @@
 // Each #kernel tells which function to compile; you can have many kernels
 #pragma kernel ComputeSmokeVoxelPositions
+#pragma kernel ComputeSmokeVoxelVisibility
 #pragma kernel ComputeSmokeVoxelColors
 #pragma kernel ComputeFloodFill
 #pragma enable_d3d11_debug_symbols
 #include <HLSLSupport.cginc>
 #include <UnityShaderVariables.cginc>
-#include <VoxelUtils.cginc>
+#include "VoxelUtils.cginc"
 
 struct Cube
 {
@@ -23,10 +24,10 @@ struct SmokeParameters
 };
 
 CBUFFER_START(_voxelGridParameters)
-    float4 _voxelSize;
     int4 _voxelCounts; // x stores total voxelCount, yzw store voxel counts for each xyz axis 
     float4 _voxelZoneExtents; // xyz store zone extents
     float4 _voxelZoneCenter; // xyz store zone center
+    float _voxelSize;
 CBUFFER_END
 
 RWStructuredBuffer<Cube> _voxels;
@@ -95,10 +96,22 @@ void ComputeSmokeVoxelPositions (uint3 id : SV_DispatchThreadID)
     const uint voxelIdx = GetVoxelIdx(id.x, id.y);
     Cube cube = _voxels[voxelIdx];
 
-    const float3 pos = VoxelIdxToVoxelPosition(voxelIdx, _voxelCounts.yz, _voxelZoneCenter.xyz, _voxelZoneExtents.xyz, _voxelSize.xxx);
+    // Set global static variables 
+    _voxelGridOffset = _voxelSize.xxx * 0.5 + _voxelZoneCenter.xyz - _voxelZoneExtents.xyz;
+
+    const float3 pos = VoxelIdxToVoxelPosition(voxelIdx, _voxelCounts.yz, _voxelSize);
     cube.position.xyz = pos;
     
-    cube.flags.x = CalculateSmokeVisibility(pos, cube.flags.z);
+    _voxels[voxelIdx] = cube;
+}
+
+[numthreads(8,8,1)]
+void ComputeSmokeVoxelVisibility (uint3 id : SV_DispatchThreadID)
+{
+    const uint voxelIdx = GetVoxelIdx(id.x, id.y);
+    Cube cube = _voxels[voxelIdx];
+    
+    cube.flags.x = CalculateSmokeVisibility(cube.position, cube.flags.z);
 
     _voxels[voxelIdx] = cube;
 }
@@ -109,7 +122,7 @@ void ComputeSmokeVoxelColors (uint3 id : SV_DispatchThreadID)
     const uint voxelIdx = GetVoxelIdx(id.x, id.y);
     Cube cube = _voxels[voxelIdx];
 
-    const float3 pos = VoxelIdxToVoxelPosition(voxelIdx, _voxelCounts.yz, _voxelZoneCenter.xyz, _voxelZoneExtents.xyz, _voxelSize.xxx);
+    const float3 pos = cube.position;
     
     float r = rand(float2(pos.x, pos.y));
     float g = rand(float2(pos.x, pos.z));

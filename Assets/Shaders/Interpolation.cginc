@@ -1,5 +1,6 @@
 float interpolate1D(float v1, float v2, float x){
-    return abs(v1*(1-x) + v2*x);
+    float u = x*x*(3.-2.*x);
+    return lerp(v1, v2, u);
 }
 
 float interpolate2D(float v1, float v2, float v3, float v4, float2 p){
