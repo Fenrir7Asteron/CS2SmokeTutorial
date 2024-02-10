@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using UnityEngine;
+using UnityEngine.Serialization;
 using UnityEngine.Windows;
 
 public struct VoxelData
@@ -45,6 +46,11 @@ public class VoxelGrid : MonoBehaviour
     [SerializeField] private float shadowDensity = 1.0f;
     [SerializeField, Range(0.0f, 1.0f)] private float absorptionCoefficient = 1.0f;
     public float ScatteringCoefficient { get => 1.0f - absorptionCoefficient; }
+    [FormerlySerializedAs("ApproximateMieG")] [Range(0.0f, 1.0f)] public float draineG;
+    [FormerlySerializedAs("ApproximateMieAlpha")] [Range(0.0f, 1.0f)] public float draineAlpha;
+    [Range(5.0f, 50.0f)] public float waterDropletDiameter;
+    
+    [Header("Debug")]
     [SerializeField] private bool showDebugVoxels;
     public Mesh debugMesh;
     public Material debugMaterial;

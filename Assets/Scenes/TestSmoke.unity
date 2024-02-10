@@ -746,9 +746,12 @@ MonoBehaviour:
   zoneExtents: {x: 10, y: 2.5, z: 10}
   voxelSize: 0.5
   floodDistance: 32
-  smokeDensity: 83.3
-  shadowDensity: 5.2
-  absorptionCoefficient: 0.302
+  smokeDensity: 15
+  shadowDensity: 1.5
+  absorptionCoefficient: 0
+  draineG: 0.429
+  draineAlpha: 0.778
+  waterDropletDiameter: 10
   showDebugVoxels: 0
   debugMesh: {fileID: 10202, guid: 0000000000000000e000000000000000, type: 0}
   debugMaterial: {fileID: 2100000, guid: 519d4b72b2a69bc4aaabb6d2c81f2b49, type: 2}
@@ -901,7 +904,7 @@ Light:
   m_Type: 1
   m_Shape: 0
   m_Color: {r: 1, g: 0.95686275, b: 0.8392157, a: 1}
-  m_Intensity: 1
+  m_Intensity: 1.1
   m_Range: 10
   m_SpotAngle: 30
   m_InnerSpotAngle: 21.80208

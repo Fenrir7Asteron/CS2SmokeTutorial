@@ -17,25 +17,32 @@ Shader "Hidden/RaymarchingSmoke"
             CGPROGRAM
             #pragma vertex vert
             #pragma fragment frag
+            //#pragma multi_compile_fwdadd_fullshadows
             #include "UnityCG.cginc"
             #include "WorleyNoise.cginc"
             #include "Interpolation.cginc"
             #include "VoxelUtils.cginc"
             #include "AutoLight.cginc"
+            //#include "Shadows.cginc"
 
             // Raymarching constants
-            #define MAX_STEP_COUNT 512
-            #define MAX_SHADOW_STEP_COUNT 32
+            #define MAX_SDF_STEP_COUNT 16
+            #define MAX_STEP_COUNT 256
+            #define MAX_SHADOW_STEP_COUNT 16
             #define STEP_SIZE 0.04
-            #define SHADOW_STEP_SIZE 0.04
-            #define ALPHA_THRESHOLD 0.01
+            #define SHADOW_STEP_SIZE 0.2
+            #define ALPHA_THRESHOLD 0.00001
+            #define CLOSE 0.00001
 
             // Noise constants
             #define WORLEY_NOISE_SLICES_COUNT 256
-            #define WORLEY_NOISE_FREQUENCY 0.7
-            #define NOISE_AMPLITUDE 2
+            #define WORLEY_NOISE_FREQUENCY 2.5
+            #define NOISE_AMPLITUDE 0.8
 
             #define PI 3.141592
+
+            /* Debugging definitions */
+            //#define DEBUG_SDF
 
             // Provided by our script
             uniform float4x4 _FrustumCornersES;
@@ -46,6 +53,8 @@ Shader "Hidden/RaymarchingSmoke"
             uniform float3 _CameraWS;
             uniform float3 _LightDir;
             uniform float4 _LightColor0;
+            uniform float2 _DraineCoefficients;
+            uniform float _WaterDropletDiameter;
             uniform float _MouseYPosition;
             uniform int _MaxFloodValue;
             UNITY_DECLARE_DEPTH_TEXTURE(_CameraDepthTexture);
@@ -141,7 +150,6 @@ Shader "Hidden/RaymarchingSmoke"
                 // float2 uv = float2(u, v + timeOffset);
                 
                 const float slices = WORLEY_NOISE_SLICES_COUNT; // number of layers of the 3d texture
-                const float freq = WORLEY_NOISE_FREQUENCY;
                 
                 float3 noiseUVW = float3(n * slices) / slices
                     - float3(timeOffset * 1.5, timeOffset, 0.0)
@@ -150,7 +158,7 @@ Shader "Hidden/RaymarchingSmoke"
                 pfbm = abs(pfbm * 2.0 - 1.0); // billowy perlin noise
                 //return pfbm;
                 
-                float worleyNoise = worleyFbm(noiseUVW, freq);
+                float worleyNoise = worleyFbm(noiseUVW, WORLEY_NOISE_FREQUENCY);
                 worleyNoise = remap(pfbm, 0.0, 1.0, worleyNoise, 1.0); // perlin-worley
 
                 worleyNoise = saturate(worleyNoise) * NOISE_AMPLITUDE;
@@ -214,7 +222,9 @@ Shader "Hidden/RaymarchingSmoke"
 
             float CalculateTransmittance(float density)
             {
-                return exp(-density);
+                return 2.0 * exp(-density)
+                * (1.0 - exp(-2.0 * density))
+                ;
             }
 
             float RayleighScattering(float cosThetaSquared)
@@ -222,10 +232,77 @@ Shader "Hidden/RaymarchingSmoke"
                 return (3.0 * PI / 16.0) * (1 + cosThetaSquared);
             }
 
+            float HenyeyGreenstein(float g, float costh){
+	            return (1.0 / (4.0 * PI))  * ((1.0 - g * g) / pow(1.0 + g*g - 2.0*g*costh, 1.5));
+            }
+
+            // eval:
+            //   u = dot(prev_dir, next_dir)
+            float evalDraine(in float u, in float g, in float a)
+            {
+                return ((1 - g*g)*(1 + a*u*u))/(4.*(1 + (a*(1 + 2*g*g))/3.) * PI * pow(1 + g*g - 2*g*u,1.5));
+            }
+
+            // d - water droplet diameter
+            float ApproximateMie(in float costh, float d)
+            {
+                float gHG = exp(-0.0990567 / (d - 1.67154));
+                float gD = exp(-2.20679 / (d + 3.91029) - 0.428934);
+                float a = exp(3.62489 - 8.29288 / (d + 5.52825));
+                float wD = exp(-0.599085 / (d - 0.641583) - 0.665888);
+                return (1.0 - wD) * evalDraine(costh, 0.0, gHG) + wD * evalDraine(costh, a, gD);
+            }
+
+            // SDFs
+            float sdfEllipsoid(float3 rad, in float3 p)
+            {
+                const float k0 = length(p/rad);
+                const float k1 = length(p/(rad*rad));
+                return k0*(k0-1.0)/k1;
+            }
+
+            float sample_scene(in float3 p)
+            {
+                SmokeParameters smokeParameters = _smokeParameters[0];
+                float3 spawnPos = smokeParameters.spawnPosition.xyz;
+                const float2 spawnTime = smokeParameters.spawnTime;
+                const float smokeProgress = (clamp((_Time.y - spawnTime.y) / spawnTime.x, 0.01, 1.0));
+                
+                const float body = sdfEllipsoid(smokeParameters.radius.xyz * smokeProgress, p - spawnPos);
+                return body;
+            }
+
+            void march_scene(in float3 rayDirection, in float maxDistance,
+                in float3 startPosition, in float startDistance, out float3 samplePosition, out float distanceTraveled, out float3 resColor)
+            {
+                resColor = float3(0.0, 0.0, 0.0);
+                samplePosition = startPosition;
+                distanceTraveled = startDistance;
+                for(int i = 0; i < MAX_SDF_STEP_COUNT; i++) {
+                    const float d = sample_scene(samplePosition);
+                    
+                    if (d < CLOSE)
+                    {
+#ifdef DEBUG_SDF
+                        resColor = float3(1.0, 0.0, 0.0);
+#endif
+                        
+                        break;
+                    }
+
+                    samplePosition += rayDirection * d;
+                    distanceTraveled += d;
+                    
+                    if (distanceTraveled > maxDistance) break;
+                }
+                //return NRes(dist, pos, mat, 1.0-step(FAR-CLOSE, dist));
+            }
+
             // Raymarch along given ray and return smoke color
-            float4 RaymarchCalculatePixelColor(const float3 rayOrigin, const float3 rayDirection, const float sceneDepth,
+            float3 RaymarchCalculatePixelColor(const float3 rayOrigin, const float3 rayDirection, const float sceneDepth,
                 out float alpha) {
-                float4 resColor = float4(0.0, 0.0, 0.0, 0.0);
+                alpha = 1.0;
+                float3 resColor = float3(0.0, 0.0, 0.0);
                 const float3 volumeAlbedo = _SmokeAlbedo.xyz;
                 
                 const SmokeParameters smokeParameters = _smokeParameters[0];
@@ -242,12 +319,18 @@ Shader "Hidden/RaymarchingSmoke"
 
                 if (isIntersectingVoxelGrid < 1.0)
                 {
-                    alpha = 1.0;
                     return resColor;
                 }
 
                 float3 samplePosition = rayOriginInsideGrid;
                 float distanceTraveled = length(samplePosition - rayOrigin);
+                
+                march_scene(rayDirection, maxDistance, samplePosition, distanceTraveled, samplePosition, distanceTraveled, resColor);
+                #ifdef DEBUG_SDF
+                        alpha = 0.0;
+                        resColor = float4(1.0, 0.0, 0.0, 1.0);
+                #endif
+
                 const float3 sampleOffset = rayDirection * STEP_SIZE;
                 const float3 shadowSampleOffset = -_LightDir * SHADOW_STEP_SIZE;
                 const float densityMultiplier = smokeParameters.density.x;
@@ -258,18 +341,27 @@ Shader "Hidden/RaymarchingSmoke"
                 
 
                 const float3 smokeSpawnPosition = smokeParameters.spawnPosition.xyz;
-                const float2 spawnTime = smokeParameters.spawnTime.x;
-                //const float smokeProgress = (clamp((_Time.y - spawnTime.y) / spawnTime.x, 0.01, 1.0));
+                
                 const float3 smokeRadius = smokeParameters.radius.xyz;
 
                 const float rayToSunAngle = dot(rayDirection, _LightDir);
                 const float rayToSunAngleSquared = rayToSunAngle * rayToSunAngle;
-                const float phase = RayleighScattering(rayToSunAngleSquared);
+
+                //const float phase = RayleighScattering(rayToSunAngleSquared);
+
+                //const float phase = evalDraine(rayToSunAngle, _DraineCoefficients.x, _DraineCoefficients.y);
+
+                const float phase = ApproximateMie(rayToSunAngle, _WaterDropletDiameter);
+
+                //float c = 1.0;
+                //const float phase = lerp(HenyeyGreenstein(-0.1 * c, rayToSunAngle), HenyeyGreenstein(0.3 * c, rayToSunAngle), 0.7);
+                //const float phase = HenyeyGreenstein(0.3 * c, rayToSunAngle);
 
                 float thickness = 0.0f;
                 float totalDensity = 0.0f;
 
-                for (int sampleIdx = 0; sampleIdx < MAX_STEP_COUNT; ++sampleIdx) {
+                for (int sampleIdx = 0; sampleIdx < MAX_STEP_COUNT; ++sampleIdx)
+                {
                     const float distanceFromSmokeOrigin =
                         saturate(length((samplePosition - smokeSpawnPosition) / smokeRadius));
                     
@@ -281,15 +373,19 @@ Shader "Hidden/RaymarchingSmoke"
                     }
                     
                     float sampleDensity = SampleSmokeDensity(samplePosition, smokeSpawnPosition, distanceFromSmokeOrigin, smokeRadius)
-                        * depthTest;
-
-                    thickness += sampleDensity * STEP_SIZE;
-                    totalDensity += sampleDensity * densityMultiplier;
-
-                    alpha = CalculateTransmittance(thickness * totalDensity * extinctionCoefficient);
+                        * depthTest * densityMultiplier;
 
                     if (sampleDensity > 0.001)
                     {
+                        thickness += sampleDensity * STEP_SIZE;
+                        totalDensity += sampleDensity;
+
+                        //Constant lighting factor based on the height of the sample point.
+                        float cloudHeight = saturate((samplePosition.y - smokeSpawnPosition.y) / (smokeRadius.y));
+                        const float3 ambient = _LightColor0.rgb * lerp(float3(0.2, 0.2, 0.2), float3(0.8, 0.8, 0.8), cloudHeight);
+
+                        float transmittance = exp(-sampleDensity * STEP_SIZE * extinctionCoefficient);
+                        
                         float totalShadowDensity = 0.0f;
                         float3 shadowSamplePosition = samplePosition;
                         
@@ -301,31 +397,36 @@ Shader "Hidden/RaymarchingSmoke"
                             shadowSamplePosition += shadowSampleOffset;
                         }
 
-                        sampleDensity = (sampleDensity * densityMultiplier * STEP_SIZE);
                         const float shadowTransmittance = CalculateTransmittance(totalShadowDensity * SHADOW_STEP_SIZE * shadowDensityMultiplier * extinctionCoefficient);
 
-                        float4 color = _LightColor0 * shadowTransmittance * alpha * phase * scatteringCoefficient * sampleDensity;
-                        resColor += color;
+                        //const float shadowAttenuation = GetSunShadowsAttenuation(samplePosition, distanceTraveled).x;
+                        // #if defined(SHADOWS_SCREEN)
+                        // const float shadowAttenuation = unity_sampleShadowmap(_SunCascadedShadowMap, float4(mul(unity_WorldToShadow[0], samplePosition).xyz, 1.0));
+                        // #else
+                        // const float shadowAttenuation = 1.0;
+                        // #endif
+
+                        const float3 luminance = 0.01 * ambient + _LightColor0.rgb
+                        * shadowTransmittance * phase * sampleDensity * scatteringCoefficient;
+                        
+                        resColor += alpha * luminance;
+
+                        alpha *= transmittance;
+
+                        if (alpha < ALPHA_THRESHOLD)
+                        {
+                            alpha = 0.0;
+                            break;   
+                        }
                     }
 
                     samplePosition += sampleOffset;
                     distanceTraveled += STEP_SIZE;
-
-                    if (alpha < ALPHA_THRESHOLD)
-                    {
-                        alpha = 0.0;
-                        break;   
-                    }
                 }
-
-                // if (distanceTraveled > sceneDepth)
-                // {
-                //     
-                // }
 
                 return resColor;
             }
-
+            
             v2f vert (appdata v)
             {
                 v2f o;
@@ -366,10 +467,14 @@ Shader "Hidden/RaymarchingSmoke"
                 //const float3 originalColor = tex2D(_MainTex, i.uv); // Color of the scene before this shader was run
 
                 float alpha = 1.0;
-                const float4 raymarchedColor = RaymarchCalculatePixelColor(rayOrigin, rayDirection, sceneDepth, alpha);
+                const float3 raymarchedColor = RaymarchCalculatePixelColor(rayOrigin, rayDirection, sceneDepth, alpha);
                 //float3 color = originalColor * (1.0 - raymarchedColor.a) + raymarchedColor.rgb;
-                output.col0 = raymarchedColor;
-                output.col1 = float4(alpha, alpha, alpha, alpha);
+                alpha = 1.0 - alpha;
+                output.col0 = float4(raymarchedColor * alpha, alpha);
+                //output.col0 = tex2D(_ShadowMapTexture, i.uv * 0.5);
+
+
+                output.col1 = float4(alpha, 0.0, 0.0, alpha);
                 return output;
             }
             ENDCG

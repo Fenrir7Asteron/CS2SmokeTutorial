@@ -23,6 +23,8 @@ public class Raymarching : MonoBehaviour
     private static readonly int LightColorPropertyID = Shader.PropertyToID("_LightColor");
     private static readonly int MouseYPositionPropertyID = Shader.PropertyToID("_MouseYPosition");
     private static readonly int MaxFloodValuePropertyID = Shader.PropertyToID("_MaxFloodValue");
+    private static readonly int _DraineCoefficientsPropertyID = Shader.PropertyToID("_DraineCoefficients");
+    private static readonly int _WaterDropletDiameterPropertyID = Shader.PropertyToID("_WaterDropletDiameter");
 
     public Camera CurrentCamera 
     { 
@@ -71,7 +73,9 @@ public class Raymarching : MonoBehaviour
         raymarchingMaterial.SetVector(LightColorPropertyID, sunLight ? sunLight.color : Vector3.one);
         raymarchingMaterial.SetFloat(MouseYPositionPropertyID, Mathf.Clamp01(Input.mousePosition.y / Screen.height));
         raymarchingMaterial.SetInt(MaxFloodValuePropertyID, voxelGrid.GetMaxFloodValue());
-        
+        raymarchingMaterial.SetVector(_DraineCoefficientsPropertyID, new Vector2(voxelGrid.draineG, voxelGrid.draineAlpha));
+        raymarchingMaterial.SetFloat(_WaterDropletDiameterPropertyID, voxelGrid.waterDropletDiameter);
+
         raymarchingMaterial.SetBuffer(VoxelDataPropertyID, voxelBuffer);
 
         GraphicsBuffer smokeParametersBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, 1,

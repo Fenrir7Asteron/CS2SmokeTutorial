@@ -12,7 +12,7 @@ public class SmokeSpawner : MonoBehaviour
 
     public void Update()
     {
-        if (Input.GetMouseButtonDown(0))
+        if (Input.GetMouseButtonDown(1))
         {
             Transform cameraTransform = mainCamera.transform;
             Vector3 origin = cameraTransform.position;
