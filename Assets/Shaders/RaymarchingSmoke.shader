@@ -220,11 +220,10 @@ Shader "Hidden/RaymarchingSmoke"
                     ;
             }
 
-            float CalculateTransmittance(float density)
+            float CalculateTransmittance(float density, float rayToSunAngle)
             {
-                return 2.0 * exp(-density)
-                * (1.0 - exp(-2.0 * density))
-                ;
+                const float beerLaw = exp(-density);
+                return lerp(2.0 * beerLaw * (1.0 - exp(-2.0 * density)), beerLaw, rayToSunAngle);
             }
 
             float RayleighScattering(float cosThetaSquared)
@@ -300,8 +299,8 @@ Shader "Hidden/RaymarchingSmoke"
 
             // Raymarch along given ray and return smoke color
             float3 RaymarchCalculatePixelColor(const float3 rayOrigin, const float3 rayDirection, const float sceneDepth,
-                out float alpha) {
-                alpha = 1.0;
+                out float totalTransmittance) {
+                totalTransmittance = 1.0;
                 float3 resColor = float3(0.0, 0.0, 0.0);
                 const float3 volumeAlbedo = _SmokeAlbedo.xyz;
                 
@@ -344,7 +343,7 @@ Shader "Hidden/RaymarchingSmoke"
                 
                 const float3 smokeRadius = smokeParameters.radius.xyz;
 
-                const float rayToSunAngle = dot(rayDirection, _LightDir);
+                const float rayToSunAngle = saturate(dot(rayDirection, _LightDir));
                 const float rayToSunAngleSquared = rayToSunAngle * rayToSunAngle;
 
                 //const float phase = RayleighScattering(rayToSunAngleSquared);
@@ -356,9 +355,6 @@ Shader "Hidden/RaymarchingSmoke"
                 //float c = 1.0;
                 //const float phase = lerp(HenyeyGreenstein(-0.1 * c, rayToSunAngle), HenyeyGreenstein(0.3 * c, rayToSunAngle), 0.7);
                 //const float phase = HenyeyGreenstein(0.3 * c, rayToSunAngle);
-
-                float thickness = 0.0f;
-                float totalDensity = 0.0f;
 
                 for (int sampleIdx = 0; sampleIdx < MAX_STEP_COUNT; ++sampleIdx)
                 {
@@ -377,18 +373,14 @@ Shader "Hidden/RaymarchingSmoke"
 
                     if (sampleDensity > 0.001)
                     {
-                        thickness += sampleDensity * STEP_SIZE;
-                        totalDensity += sampleDensity;
-
                         //Constant lighting factor based on the height of the sample point.
                         float cloudHeight = saturate((samplePosition.y - smokeSpawnPosition.y) / (smokeRadius.y));
                         const float3 ambient = _LightColor0.rgb * lerp(float3(0.2, 0.2, 0.2), float3(0.8, 0.8, 0.8), cloudHeight);
 
-                        float transmittance = exp(-sampleDensity * STEP_SIZE * extinctionCoefficient);
-                        
+
                         float totalShadowDensity = 0.0f;
                         float3 shadowSamplePosition = samplePosition;
-                        
+
                         for (int shadowSampleIdx = 0; shadowSampleIdx < MAX_SHADOW_STEP_COUNT; ++shadowSampleIdx) {
                             const float shadowSmokeDensity = SampleSmokeDensity(shadowSamplePosition,
                                 smokeSpawnPosition, distanceFromSmokeOrigin, smokeRadius);
@@ -397,7 +389,10 @@ Shader "Hidden/RaymarchingSmoke"
                             shadowSamplePosition += shadowSampleOffset;
                         }
 
-                        const float shadowTransmittance = CalculateTransmittance(totalShadowDensity * SHADOW_STEP_SIZE * shadowDensityMultiplier * extinctionCoefficient);
+                        const float shadowTransmittance =
+                            CalculateTransmittance(
+                                totalShadowDensity * SHADOW_STEP_SIZE * shadowDensityMultiplier * extinctionCoefficient,
+                                rayToSunAngle);
 
                         //const float shadowAttenuation = GetSunShadowsAttenuation(samplePosition, distanceTraveled).x;
                         // #if defined(SHADOWS_SCREEN)
@@ -406,16 +401,18 @@ Shader "Hidden/RaymarchingSmoke"
                         // const float shadowAttenuation = 1.0;
                         // #endif
 
-                        const float3 luminance = 0.01 * ambient + _LightColor0.rgb
+                        const float3 luminance = 0.02 * ambient + _LightColor0.rgb
                         * shadowTransmittance * phase * sampleDensity * scatteringCoefficient;
+
+                        float transmittance = exp(-sampleDensity * STEP_SIZE * extinctionCoefficient);
                         
-                        resColor += alpha * luminance;
+                        resColor += totalTransmittance * (luminance - luminance * transmittance) / (extinctionCoefficient * sampleDensity / densityMultiplier);
 
-                        alpha *= transmittance;
+                        totalTransmittance *= transmittance;
 
-                        if (alpha < ALPHA_THRESHOLD)
+                        if (totalTransmittance < ALPHA_THRESHOLD)
                         {
-                            alpha = 0.0;
+                            totalTransmittance = 0.0;
                             break;   
                         }
                     }
@@ -468,12 +465,8 @@ Shader "Hidden/RaymarchingSmoke"
 
                 float alpha = 1.0;
                 const float3 raymarchedColor = RaymarchCalculatePixelColor(rayOrigin, rayDirection, sceneDepth, alpha);
-                //float3 color = originalColor * (1.0 - raymarchedColor.a) + raymarchedColor.rgb;
                 alpha = 1.0 - alpha;
-                output.col0 = float4(raymarchedColor * alpha, alpha);
-                //output.col0 = tex2D(_ShadowMapTexture, i.uv * 0.5);
-
-
+                output.col0 = float4(raymarchedColor * alpha, 1.0);
                 output.col1 = float4(alpha, 0.0, 0.0, alpha);
                 return output;
             }

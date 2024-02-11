@@ -59,15 +59,11 @@ Shader "Hidden/RaymarchingSmoke"
 
             fixed4 frag (v2f i) : SV_Target
             {
-                const float4 color1 = tex2D(_MainTex, i.uv); // Color of the scene before this shader was run                
-                const float4 color2 = tex2D(_SecondTex, i.uv); // Color of the scene before this shader was run
-                const float alpha = 1.0 -  saturate(tex2D(_MaskTex, i.uv).r);
-                
-                // float x = 1.0 - alpha;
-                // float u = x * x * (3.0 - 2.0 * x ); // cubic curve
-                const float3 colorf = color1.rgb * alpha + color2.rgb;
-                const float alphaf = alpha + color2.a * (1.0 - alpha);
-                return float4(colorf, alphaf);
+                const float4 colorMain = tex2D(_MainTex, i.uv);          
+                const float4 colorCloud = tex2D(_SecondTex, i.uv);
+                const float alphaCloud = saturate(tex2D(_MaskTex, i.uv).r);
+                const float3 colorf = colorCloud.rgb + colorMain.rgb * (1.0 - alphaCloud);
+                return float4(colorf, 1.0);
             }
             ENDCG
         }
